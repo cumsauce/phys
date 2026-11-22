@@ -231,6 +231,12 @@ pub enum ExciterKind {
     Mallet,
     /// An ideal instantaneous hit; `strength` is the impulse in N.s.
     Impulse,
+    /// A finger pulls the point aside and lets go; `strength` is how far,
+    /// in metres (a few millimetres is a firm pluck).
+    Pluck,
+    /// A bow drawn across the point; `strength` is its speed in m/s (0.2 is
+    /// a moderate stroke) and 0 lifts it.
+    Bow,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -252,6 +258,13 @@ pub struct Exciter {
     /// Mallet Hunt-Crossley damping, s/m. Default 0.3.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub damping: Option<f64>,
+    /// Pluck: seconds the pull takes before the release. Default 0.02.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<f64>,
+    /// Bow: the most friction it can apply, N (how hard it is pressed).
+    /// Default 0.3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pressure: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -290,7 +303,7 @@ pub struct Event {
     /// Seconds from the start.
     pub t: f64,
     pub exciter: String,
-    /// Mallet: m/s. Impulse: N.s.
+    /// Mallet: m/s. Impulse: N.s. Pluck: metres pulled. Bow: m/s, 0 to lift.
     #[serde(default = "one")]
     pub strength: f64,
 }
@@ -460,6 +473,8 @@ impl Scene {
             range(&format!("exciter `{n}`: mass"), e.mass, 1e-6, 1e4)?;
             range(&format!("exciter `{n}`: stiffness"), e.stiffness, 1.0, 1e13)?;
             range(&format!("exciter `{n}`: damping"), e.damping, 0.0, 100.0)?;
+            range(&format!("exciter `{n}`: time"), e.time, 0.001, 2.0)?;
+            range(&format!("exciter `{n}`: pressure"), e.pressure, 0.0, 100.0)?;
             if let Some(d) = e.dir {
                 crate::math::unit(d)
                     .ok_or_else(|| format!("exciter `{n}`: dir {d:?}: give a direction"))?;

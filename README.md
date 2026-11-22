@@ -2,9 +2,9 @@
 
 Build a sounding object out of connected parts, excite it, and hear it.
 
-A scene is a JSON document of parts (string, bar, plate, membrane, point mass), joints (springs, rattling springs, contacts), exciters (mallets, impulses) and listeners (microphones, contact pickups). Each part is baked into a table of vibration modes; the simulation couples those modes through the joints and runs sample by sample, live or offline.
+A scene is a JSON document of parts (string, bar, plate, membrane, point mass), joints (springs, rattling springs, contacts), exciters (mallets, impulses, plucks, bows) and listeners (microphones, contact pickups). Each part is baked into a table of vibration modes; the simulation couples those modes through the joints and runs sample by sample, live or offline.
 
-Status: milestones 1 to 4 of the plan (physics core, offline render, real-time playback, 3D web editor, MCP server). Pluck and bow excitation, mesh parts and moving bodies are not built yet.
+Status: milestones 1 to 4 of the plan (physics core, offline render, real-time playback, 3D web editor, MCP server). Mesh parts, air columns and moving bodies are not built yet.
 
 ## Run
 
@@ -34,7 +34,7 @@ Then open http://localhost:7878. `edit scene.json` opens (and saves to) a file; 
 
 In the editor:
 
-- **Strike** (H): click anywhere on a part to hit it there. The Mallet panel sets speed, hardness and mass.
+- **Play** (H): excite a part by hand, in one of three ways chosen in the panel. Strike: click to hit it with a mallet (speed, hardness, mass). Pluck: click to pull the point aside and let go (pull distance). Bow: hold the mouse down to bow it there, let go to lift (bow speed, pressure); near one end of a string works best.
 - **Select** (S): click a part, joint or listener to edit its numbers on the right; drag the gizmo to move (W) or rotate (E) a part or a microphone. With nothing selected the panel lists everything in the scene.
 - **Joint** (J): click two points to tie them with a spring; click empty space second to tie the first point to the ground. Change it to a contact, or give it free play to make it rattle, in the panel.
 - **Pickup** (P): click a part to put a contact pickup there.
@@ -56,7 +56,7 @@ serves MCP tools on stdio and the same editor page alongside, sharing one scene 
 | `scene_summary` | Everything in the scene, warnings, and whether audio and the page are live |
 | `apply_ops` | An atomic batch of upserts and deletes; one undo step |
 | `describe_op` | An example and the JSON schema of each op type |
-| `strike`, `excite` | Hit a point, or fire a named exciter, live |
+| `strike`, `excite` | Strike, pluck or bow a point by hand, or fire a named exciter, live |
 | `listen` | Render offline; returns peak, decay times, strongest partials and a spectrogram |
 | `verify` | Render offline and run PASS / FAIL checks (partial, decay, audible, stable) |
 | `undo`, `redo`, `save`, `open`, `new_scene` | Housekeeping |
@@ -97,6 +97,8 @@ Modes are stepped with the exact update of a damped oscillator. Joints come in t
 
 Two things here go beyond that paper and are this project's own: the gauge (the energy offset under the square root) is reset to the energy in the scene each time a contact engages, and any energy an engagement over-returns is taken back by scaling the state. The first restores second-order accuracy for Hertz contacts; the second keeps the total from ever rising.
 
+A pluck is a force that swells as a finger pulls the point aside, then lets go in under a millisecond. A bow is friction against a moving surface, gripping at low relative speed and letting go as the part slips; each step it is treated as a damper on the relative speed with its coefficient frozen, after Russo, Ducceschi and Bilbao, "Efficient Simulation of the Bowed String in Modal Form" (DAFx 2022). That keeps the update explicit: each bow adds one rank-one term, solved together with the auxiliary variable's in a small system.
+
 The `explicit` solver (`"settings": {"solver": "explicit"}`) applies joint forces as they stand with automatic oversampling, as sounder's rig does. It is kept as a reference.
 
 ### Solver comparison
@@ -136,7 +138,8 @@ The state is double precision and nothing is hand-vectorised yet.
 - A microphone hears each part through a rough radiation weight per mode, not a real radiation model. Contact pickups are exact for the model.
 - An edit that changes a part's modes crossfades to a silent new simulation.
 - The editor sets its output level by test-striking every part after each edit, so making a part louder or quieter by editing it is evened out.
-- Strike speed comes from the Mallet panel, not from how fast you drag.
+- Strike speed comes from the panel, not from how fast you drag, and a bow stays where you first pressed.
+- There is one roaming bow: two parts cannot be bowed by hand at once (named bow exciters can overlap).
 - The vibration display is scaled to the loudest part, so a quiet part next to a loud one barely moves.
 - Parts cannot be renamed or resized with handles in the editor; sizes are typed in.
 - A spring near the end of a string raises its pitch (a few percent in `string_on_plate`), as it would physically.

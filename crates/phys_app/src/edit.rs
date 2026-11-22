@@ -52,29 +52,101 @@ pub(crate) enum AudioMsg {
     Command(Command),
 }
 
-/// One hit with the roaming mallet.
+/// How the roaming hand excites a part.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum HandKind {
+    /// A mallet thrown at the point.
+    #[default]
+    Strike,
+    /// A finger pulls the point aside and lets go.
+    Pluck,
+    /// A bow drawn across the point until it is lifted.
+    Bow,
+}
+
+/// One action of the roaming hand: a strike, a pluck or a bow stroke.
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct Strike {
-    /// The part to hit.
+    /// strike (the default), pluck or bow.
+    #[serde(default)]
+    pub(crate) kind: HandKind,
+    /// The part to excite.
     pub(crate) part: String,
     /// Where on it, in the part's port coordinates (each 0..1): [u] for a
     /// string or bar, [u, v] for a plate or membrane, [] for a mass.
     #[serde(default)]
     pub(crate) at: Vec<f64>,
-    /// Mallet speed, m/s. Default 2.
-    #[serde(default = "default_speed")]
-    pub(crate) speed: f64,
-    /// Mallet mass, kg. Default 0.02.
+    /// Strike: mallet speed, m/s (default 2). Bow: bow speed, m/s (default 0.2).
+    #[serde(default)]
+    pub(crate) speed: Option<f64>,
+    /// Strike: mallet mass, kg. Default 0.02.
     #[serde(default = "default_mass")]
     pub(crate) mass: f64,
-    /// Contact stiffness, N/m^1.5: 1e6 felt, 1e7 rubber, 1e8 wood (the
-    /// default), 1e10 steel.
+    /// Strike: contact stiffness, N/m^1.5: 1e6 felt, 1e7 rubber, 1e8 wood
+    /// (the default), 1e10 steel.
     #[serde(default = "default_stiffness")]
     pub(crate) stiffness: f64,
+    /// Pluck: how far the point is pulled aside, metres. Default 0.003.
+    #[serde(default = "default_pull")]
+    pub(crate) pull: f64,
+    /// Pluck: seconds the pull takes before the release. Default 0.02.
+    #[serde(default = "default_time")]
+    pub(crate) time: f64,
+    /// Bow: the most friction it can apply, N. Default 0.3.
+    #[serde(default = "default_pressure")]
+    pub(crate) pressure: f64,
+    /// Bow: seconds the stroke lasts, where nothing else lifts it (offline
+    /// renders and the MCP tools). Default 1.
+    #[serde(default = "default_duration")]
+    pub(crate) duration: f64,
 }
 
-fn default_speed() -> f64 {
-    2.0
+impl Strike {
+    fn speed(&self) -> f64 {
+        self.speed.unwrap_or(match self.kind {
+            HandKind::Bow => 0.2,
+            _ => 2.0,
+        })
+    }
+
+    pub(crate) fn describe(&self) -> String {
+        match self.kind {
+            HandKind::Strike => format!(
+                "struck {} at {:?} at {} m/s",
+                self.part,
+                self.at,
+                self.speed()
+            ),
+            HandKind::Pluck => format!(
+                "plucked {} at {:?}, pulled {} m",
+                self.part, self.at, self.pull
+            ),
+            HandKind::Bow => format!(
+                "bowed {} at {:?} at {} m/s, pressure {} N",
+                self.part,
+                self.at,
+                self.speed(),
+                self.pressure
+            ),
+        }
+    }
+}
+
+fn default_pull() -> f64 {
+    0.003
+}
+
+fn default_time() -> f64 {
+    0.02
+}
+
+fn default_pressure() -> f64 {
+    0.3
+}
+
+fn default_duration() -> f64 {
+    1.0
 }
 
 fn default_mass() -> f64 {
@@ -104,6 +176,8 @@ enum ClientMsg {
     Save,
     Render,
     ClearTake,
+    /// Lift the roaming bow.
+    BowStop,
     /// The page's answer to a screenshot request: a data URL.
     Shot {
         data: String,
@@ -127,6 +201,8 @@ pub(crate) struct App {
     volume: f32,
     pub(crate) take: Vec<(f64, Strike)>,
     take_start: Option<Instant>,
+    /// The bow stroke in `take` that has not been lifted yet.
+    bow_open: Option<usize>,
 }
 
 pub(crate) type Shared = Arc<Mutex<App>>;
@@ -234,27 +310,70 @@ impl App {
             .parts
             .iter()
             .position(|p| p.name == s.part)
-            .ok_or_else(|| format!("strike: no part named `{}`", s.part))?;
+            .ok_or_else(|| format!("no part named `{}`", s.part))?;
         if s.at.len() != scene.parts[part].shape.at_len() || s.at.iter().any(|x| !x.is_finite()) {
-            return Err(format!("strike: at {:?} does not fit `{}`", s.at, s.part));
+            return Err(format!("at {:?} does not fit `{}`", s.at, s.part));
         }
-        if !(s.speed.is_finite() && s.mass > 0.0 && s.stiffness > 0.0) {
-            return Err("strike: give a speed, a mass > 0 and a stiffness > 0".into());
+        let speed = s.speed();
+        let fine = match s.kind {
+            HandKind::Strike => speed.is_finite() && s.mass > 0.0 && s.stiffness > 0.0,
+            HandKind::Pluck => s.pull.is_finite() && s.time > 0.0,
+            HandKind::Bow => speed.is_finite() && s.pressure >= 0.0 && s.pressure.is_finite(),
+        };
+        if !fine {
+            return Err(
+                "give finite numbers: a mass and stiffness > 0, a time > 0, a pressure >= 0".into(),
+            );
         }
-        let rig = self
-            .rig
-            .as_ref()
-            .ok_or("strike: the scene is not compiled")?;
-        self.send(Command::Strike {
-            start: rig.start[part],
-            weights: rig.weights(part, &s.at, None),
-            speed: s.speed,
-            mass: s.mass,
-            stiffness: s.stiffness,
+        let rig = self.rig.as_ref().ok_or("the scene is not compiled")?;
+        let (start, weights) = (rig.start[part], rig.weights(part, &s.at, None));
+        self.send(match s.kind {
+            HandKind::Strike => Command::Strike {
+                start,
+                weights,
+                speed,
+                mass: s.mass,
+                stiffness: s.stiffness,
+            },
+            HandKind::Pluck => Command::Pluck {
+                start,
+                weights,
+                pull: s.pull,
+                time: s.time,
+            },
+            HandKind::Bow => Command::Bow {
+                start,
+                weights,
+                speed,
+                pressure: s.pressure,
+            },
         });
-        let start = *self.take_start.get_or_insert_with(Instant::now);
-        self.take.push((start.elapsed().as_secs_f64(), s));
+        let now = self
+            .take_start
+            .get_or_insert_with(Instant::now)
+            .elapsed()
+            .as_secs_f64();
+        self.close_bow(now);
+        if s.kind == HandKind::Bow {
+            self.bow_open = Some(self.take.len());
+        }
+        self.take.push((now, s));
         Ok(())
+    }
+
+    /// The open bow stroke in the take, if any, ends at `now`.
+    fn close_bow(&mut self, now: f64) {
+        if let Some((t, s)) = self.bow_open.take().and_then(|i| self.take.get_mut(i)) {
+            s.duration = (now - *t).max(0.01);
+        }
+    }
+
+    /// Lift the roaming bow.
+    pub(crate) fn bow_stop(&mut self) {
+        self.send(Command::BowStop);
+        if let Some(start) = self.take_start {
+            self.close_bow(start.elapsed().as_secs_f64());
+        }
     }
 
     /// Run the scene offline at 48 kHz: `strikes` with the roaming mallet,
@@ -268,6 +387,7 @@ impl App {
     ) -> Result<Render, String> {
         enum Hit<'a> {
             Hand(&'a Strike),
+            Lift,
             Exciter(usize, f64),
         }
         let scene = self.doc.scene();
@@ -284,6 +404,9 @@ impl App {
                 return Err(format!("strike: at {:?} does not fit `{}`", s.at, s.part));
             }
             events.push((*t, Hit::Hand(s)));
+            if s.kind == HandKind::Bow {
+                events.push((*t + s.duration.clamp(0.01, 600.0), Hit::Lift));
+            }
         }
         if score {
             for ev in &scene.score {
@@ -309,10 +432,17 @@ impl App {
             match hit {
                 Hit::Hand(s) => {
                     if let Some(part) = scene.parts.iter().position(|p| p.name == s.part) {
-                        let w = rig.weights(part, &s.at, None);
-                        sim.strike(rig.start[part], &w, s.speed, s.mass, s.stiffness);
+                        let (start, w) = (rig.start[part], rig.weights(part, &s.at, None));
+                        match s.kind {
+                            HandKind::Strike => {
+                                sim.strike(start, &w, s.speed(), s.mass, s.stiffness)
+                            }
+                            HandKind::Pluck => sim.pluck(start, &w, s.pull, s.time),
+                            HandKind::Bow => sim.bow(start, &w, s.speed(), s.pressure),
+                        }
                     }
                 }
+                Hit::Lift => sim.bow_stop(),
                 Hit::Exciter(i, strength) => sim.excite(*i, *strength),
             }
         }
@@ -373,6 +503,7 @@ impl App {
         }
         self.take.clear();
         self.take_start = None;
+        self.bow_open = None;
         let _ = self
             .events
             .send(json!({"type": "take", "count": 0}).to_string());
@@ -476,7 +607,12 @@ impl App {
             }
             ClientMsg::Save => self.save().map(Some),
             ClientMsg::Render => self.render_take().map(Some),
+            ClientMsg::BowStop => {
+                self.bow_stop();
+                Ok(None)
+            }
             ClientMsg::ClearTake => {
+                self.bow_stop();
                 self.take.clear();
                 self.take_start = None;
                 let _ = self
@@ -699,6 +835,7 @@ pub(crate) fn build(path: Option<PathBuf>, audio: bool) -> Result<Shared, String
         volume: 1.0,
         take: Vec::new(),
         take_start: None,
+        bow_open: None,
     };
     app.rebuild()?;
     Ok(Arc::new(Mutex::new(app)))

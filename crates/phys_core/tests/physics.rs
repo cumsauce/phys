@@ -257,3 +257,78 @@ fn a_port_on_a_missing_part_is_named_in_the_error() {
     .expect_err("rejected");
     assert!(err.contains("joint `j`") && err.contains("ghost"), "{err}");
 }
+
+const FINGERED: &str = r#"{
+  "parts": [{"name": "s", "shape": {"kind": "string", "length": 0.65, "radius": 0.0004, "f0": 220}}],
+  "exciters": [EXCITER],
+  "listeners": [{"name": "pu", "kind": "pickup", "on": {"part": "s", "at": [0.37]}}],
+  "score": SCORE
+}"#;
+
+fn rms(x: &[f32]) -> f64 {
+    (x.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>() / x.len() as f64).sqrt()
+}
+
+#[test]
+fn a_pluck_sets_a_string_ringing_at_its_pitch() {
+    let json = FINGERED
+        .replace(
+            "EXCITER",
+            r#"{"name": "f", "kind": "pluck", "on": {"part": "s", "at": [AT]}}"#,
+        )
+        .replace(
+            "SCORE",
+            r#"[{"t": 0.0, "exciter": "f", "strength": 0.003}]"#,
+        );
+    let x = mono(&json.replace("AT", "0.2"), 1.0);
+    let f = peak_near(&x, 220.0, 0.05);
+    assert!((f / 220.0 - 1.0).abs() < 0.01, "f0 measured {f}");
+    // Nothing sounds until the finger lets go, 20 ms in.
+    let quiet = rms(&x[..(0.015 * f64::from(SR)) as usize]);
+    let loud = rms(&x[(0.03 * f64::from(SR)) as usize..(0.1 * f64::from(SR)) as usize]);
+    assert!(quiet < loud * 0.2, "before release {quiet}, after {loud}");
+    // Plucked in the middle, the even harmonics are missing.
+    let mid = mono(&json.replace("AT", "0.5"), 1.0);
+    assert!(level(&mid, 440.0) < level(&mid, 220.0) * 0.01);
+}
+
+#[test]
+fn a_bow_holds_a_steady_note_and_lifting_it_lets_the_note_die() {
+    let json = FINGERED
+        .replace("EXCITER", r#"{"name": "bow", "kind": "bow", "on": {"part": "s", "at": [0.12]}, "pressure": 0.3}"#)
+        .replace("SCORE", r#"[{"t": 0.0, "exciter": "bow", "strength": 0.2}, {"t": 2.0, "exciter": "bow", "strength": 0}]"#);
+    let x = mono(&json, 4.0);
+    let sr = SR as usize;
+    let (a, b) = (rms(&x[sr..sr * 3 / 2]), rms(&x[sr * 3 / 2..sr * 2]));
+    assert!(
+        a > 0.0 && (b / a - 1.0).abs() < 0.2,
+        "1.0-1.5 s {a}, 1.5-2.0 s {b}"
+    );
+    let f = peak_near(&x[sr..2 * sr], 220.0, 0.06);
+    assert!((f / 220.0 - 1.0).abs() < 0.03, "bowed pitch {f}");
+    // A bowed string is rich in harmonics.
+    assert!(level(&x[sr..2 * sr], 440.0) > level(&x[sr..2 * sr], 220.0) * 0.05);
+    let tail = rms(&x[sr * 7 / 2..]);
+    assert!(
+        tail < a * 0.3,
+        "still {tail} after the bow lifted (was {a})"
+    );
+}
+
+#[test]
+fn a_bow_cannot_blow_the_string_up_however_hard_it_is_pressed() {
+    let json = FINGERED
+        .replace(
+            "EXCITER",
+            r#"{"name": "bow", "kind": "bow", "on": {"part": "s", "at": [0.12]}, "pressure": 50}"#,
+        )
+        .replace(
+            "SCORE",
+            r#"[{"t": 0.0, "exciter": "bow", "strength": 1.5}]"#,
+        );
+    let r = render(&scene(&json), SR, 2.0).expect("renders");
+    assert!(!r.blown);
+    // Far past any playable pressure the motion is rough, but it stays
+    // within a small multiple of the bow's own speed.
+    assert!(r.peak.is_finite() && r.peak < 100.0, "peak {}", r.peak);
+}

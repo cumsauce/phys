@@ -1,0 +1,23 @@
+{
+  "name": "bowed_string",
+  "parts": [
+    {"name": "top", "shape": {"kind": "plate", "size": [0.36, 0.22], "thickness": 0.003}, "material": "wood"},
+    {"name": "string", "shape": {"kind": "string", "length": 0.69, "radius": 0.0004, "f0": 143.9}, "material": "steel", "pos": [0, 0.03, 0], "loss": 0.001}
+  ],
+  "joints": [
+    {"name": "bridge", "kind": "spring", "a": {"part": "string", "at": [0.03]}, "b": {"part": "top", "at": [0.3, 0.5]}, "stiffness": 3e4}
+  ],
+  "exciters": [
+    {"name": "bow", "kind": "bow", "on": {"part": "string", "at": [0.11]}, "pressure": 0.3},
+    {"name": "finger", "kind": "pluck", "on": {"part": "string", "at": [0.25]}}
+  ],
+  "listeners": [
+    {"name": "mic", "kind": "mic", "pos": [0.1, 0.4, 0.3]}
+  ],
+  "score": [
+    {"t": 0.1, "exciter": "bow", "strength": 0.15},
+    {"t": 1.6, "exciter": "bow", "strength": 0.4},
+    {"t": 2.8, "exciter": "bow", "strength": 0},
+    {"t": 3.6, "exciter": "finger", "strength": 0.004}
+  ]
+}

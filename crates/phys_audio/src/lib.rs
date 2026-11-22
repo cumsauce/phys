@@ -33,6 +33,22 @@ pub enum Command {
         mass: f64,
         stiffness: f64,
     },
+    /// Pluck a part with the roaming finger; see `Sim::pluck`.
+    Pluck {
+        start: usize,
+        weights: Vec<f64>,
+        pull: f64,
+        time: f64,
+    },
+    /// Start or change the roaming bow; see `Sim::bow`.
+    Bow {
+        start: usize,
+        weights: Vec<f64>,
+        speed: f64,
+        pressure: f64,
+    },
+    /// Lift the roaming bow.
+    BowStop,
     /// Replace the simulation (after an edit), with a short crossfade. It
     /// carries on from the old one's motion when their modes match.
     Swap(Box<Sim>),
@@ -167,6 +183,25 @@ impl Core {
                     self.sim.strike(start, &weights, speed, mass, stiffness);
                     let _ = self.trash.push(Trash::Weights(weights));
                 }
+                Command::Pluck {
+                    start,
+                    weights,
+                    pull,
+                    time,
+                } => {
+                    self.sim.pluck(start, &weights, pull, time);
+                    let _ = self.trash.push(Trash::Weights(weights));
+                }
+                Command::Bow {
+                    start,
+                    weights,
+                    speed,
+                    pressure,
+                } => {
+                    self.sim.bow(start, &weights, speed, pressure);
+                    let _ = self.trash.push(Trash::Weights(weights));
+                }
+                Command::BowStop => self.sim.bow_stop(),
                 Command::Swap(mut new) => {
                     new.adopt(&self.sim);
                     let prev = std::mem::replace(&mut self.sim, new);
@@ -465,7 +500,45 @@ mod live_tests {
         control.levels(&[0, 1, 2], &mut levels);
         assert!(levels.iter().all(|a| *a > 0.0), "{levels:?}");
 
+        // The roaming finger and bow reach the simulation too.
+        control.status();
+        control.send(Command::Pluck {
+            start: rig.start[0],
+            weights: rig.weights(0, &[0.6, 0.3], None),
+            pull: 0.002,
+            time: 0.01,
+        });
+        control.send(Command::Bow {
+            start: rig.start[0],
+            weights: rig.weights(0, &[0.9, 0.5], None),
+            speed: 0.2,
+            pressure: 0.3,
+        });
+        for _ in 0..12 {
+            core.fill(&mut buf);
+        }
+        let bowed = control.status().peak;
+        control.send(Command::BowStop);
+        for _ in 0..60 {
+            core.fill(&mut buf);
+        }
+        control.status();
+        core.fill(&mut buf);
+        let lifted = control.status().peak;
+        assert!(
+            bowed > 0.0 && lifted < bowed * 0.5,
+            "bowed {bowed}, lifted {lifted}"
+        );
+
         // Move the microphone: same modes, so the plate keeps ringing.
+        control.send(Command::Strike {
+            start: rig.start[0],
+            weights: rig.weights(0, &[0.3, 0.6], None),
+            speed: 2.0,
+            mass: 0.004,
+            stiffness: 1e7,
+        });
+        core.fill(&mut buf);
         let moved = Scene::from_json(&PLATE.replace("PAN", "0.5")).expect("parses");
         let (sim, _) = Sim::compile_with(&moved, 48_000.0, &opts).expect("compiles");
         control.swap(sim);

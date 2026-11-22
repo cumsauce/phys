@@ -14,7 +14,7 @@
     <span class="brand">phys</span>
     <div class="group" id="tools">
       <button data-tool="select" title="Select and move (S)">Select</button>
-      <button data-tool="strike" title="Click a part to hit it (H)">Strike</button>
+      <button data-tool="strike" title="Strike, pluck or bow a part by hand (H)">Play</button>
       <button data-tool="joint" title="Click two points to tie them with a spring; click empty space second to tie to the ground (J)">Joint</button>
       <button data-tool="pickup" title="Click a part to stick a contact pickup on it (P)">Pickup</button>
     </div>
@@ -51,10 +51,26 @@
     <div id="view"></div>
     <aside>
       <section id="strikebox">
-        <h2>Mallet</h2>
-        <label>Speed <output id="speed_out"></output><input type="range" id="speed" min="0.2" max="8" step="0.1" value="2"></label>
-        <label>Hardness <output id="hard_out"></output><input type="range" id="hard" min="5" max="10" step="0.1" value="8"></label>
-        <label>Mass <output id="mass_out"></output><input type="range" id="mass" min="-3" max="-0.3" step="0.05" value="-1.7"></label>
+        <h2>Play by hand</h2>
+        <div class="group" id="hand">
+          <button data-hand="strike" title="A mallet thrown at the point you click">Strike</button>
+          <button data-hand="pluck" title="Pull the point aside and let go">Pluck</button>
+          <button data-hand="bow" title="Hold the mouse down on a part to bow it there">Bow</button>
+        </div>
+        <div data-for="strike">
+          <label>Speed <output id="speed_out"></output><input type="range" id="speed" min="0.2" max="8" step="0.1" value="2"></label>
+          <label>Hardness <output id="hard_out"></output><input type="range" id="hard" min="5" max="10" step="0.1" value="8"></label>
+          <label>Mass <output id="mass_out"></output><input type="range" id="mass" min="-3" max="-0.3" step="0.05" value="-1.7"></label>
+        </div>
+        <div data-for="pluck">
+          <label>Pull <output id="pull_out"></output><input type="range" id="pull" min="0.5" max="12" step="0.1" value="3"></label>
+          <div class="note">Click a point to pluck it.</div>
+        </div>
+        <div data-for="bow">
+          <label>Bow speed <output id="bowspeed_out"></output><input type="range" id="bowspeed" min="0.02" max="1" step="0.01" value="0.2"></label>
+          <label>Pressure <output id="pressure_out"></output><input type="range" id="pressure" min="-1.7" max="0.5" step="0.02" value="-0.5"></label>
+          <div class="note">Hold the mouse down on a part to bow it; let go to lift the bow. Near one end of a string works best.</div>
+        </div>
       </section>
       <section id="inspector"></section>
     </aside>

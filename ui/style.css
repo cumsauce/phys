@@ -119,3 +119,6 @@ aside li small { color: var(--dim); }
 
 #toast { color: var(--text); max-width: 50vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #toast.error { color: var(--bad); }
+
+#hand { margin-bottom: 10px; }
+#hand button { flex: 1; }

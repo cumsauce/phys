@@ -20,7 +20,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::edit::{self, App, Shared, Strike};
+use crate::edit::{self, App, HandKind, Shared, Strike};
 
 const INSTRUCTIONS: &str = r#"phys models sound from connected physical parts. Units are SI (metres, kilograms, seconds, newtons, hertz); Y is up.
 - You cannot hear. `listen` renders offline and returns measurements (strongest partials, decay times, peak) and a spectrogram; `verify` runs PASS / FAIL checks. Say what you measured, never that something "sounds" a certain way: the human's ears decide.
@@ -28,7 +28,8 @@ const INSTRUCTIONS: &str = r#"phys models sound from connected physical parts. U
 - Parts: string (f0 or tension), bar (free or supported ends), plate (simply supported), membrane (f0 or tension), mass. A part's local axes: strings and bars run along X, plates and membranes lie in XZ, and all vibrate along Y. `pos` and `rot` (degrees, about X then Y then Z) place it.
 - A port is a point on a part in its own normalised coordinates: {"part": "top", "at": [0.7, 0.45]}. `at` is [u] for a string or bar, [u, v] for a plate or membrane, [] for a mass; each 0..1. A port on a node line of a mode cannot excite or hear that mode (the middle of a string misses every even harmonic).
 - Joints act along one direction (default: the normal of `a`'s part). spring: stiffness N/m, optional damping, cubic, and `gap` for free play (a rattle). contact: one-sided Hertz, stiffness N/m^1.5, `gap` the separation at rest. Leave `b` out to tie `a` to the ground. A spring near a string's end raises its pitch a little, as it would physically.
-- To excite: `strike` hits any point with a roaming mallet, live (the human hears it and it is added to the take). `listen` / `verify` take `strikes` with times, or replay the take, or play the scene's score of named exciters.
+- To excite by hand: `strike` acts on any point, live (the human hears it and it joins the take), with `kind` strike (a mallet: speed, mass, stiffness), pluck (pull, in metres) or bow (speed, pressure, duration). `listen` / `verify` take the same actions as `strikes` with times `t`, or replay the take, or play the scene's score of named exciters (kinds mallet, impulse, pluck, bow).
+- Bowing: speed about 0.1-0.5 m/s, pressure about 0.1-1 N, near one end of a string (at 0.08-0.15). Too little pressure for the speed gives a thin whistle on a high harmonic; too much gives a rough, pitchless scrape. `listen` shows which you have: a steady harmonic series on the string's pitch is a held note.
 - A microphone hears every part through a rough radiation estimate; a pickup reads the surface velocity at one port exactly. A scene with no listener is silent.
 - The human may be editing the same scene in the browser page; scene_summary shows the current state. `screenshot` shows what their viewport shows."#;
 
@@ -55,6 +56,8 @@ struct ExciteArgs {
     /// A named exciter of the scene.
     exciter: String,
     /// Mallet: speed in m/s (default 2). Impulse: N.s (default 0.01).
+    /// Pluck: metres pulled (default 0.003). Bow: speed in m/s (default
+    /// 0.2); 0 lifts it.
     #[serde(default)]
     strength: Option<f64>,
 }
@@ -411,9 +414,11 @@ impl Tools {
             "part": {"type": "part", "name": "top", "shape": {"kind": "plate", "size": [0.4, 0.3], "thickness": 0.003}, "material": "wood", "pos": [0, 0, 0], "rot": [0, 0, 0]},
             "joint": {"type": "joint", "name": "bridge", "kind": "spring", "a": {"part": "string", "at": [0.95]}, "b": {"part": "top", "at": [0.7, 0.45]}, "stiffness": 2e4},
             "exciter": {"type": "exciter", "name": "pick", "kind": "mallet", "on": {"part": "string", "at": [0.18]}, "mass": 0.002, "stiffness": 1e7},
+            "exciter (pluck)": {"type": "exciter", "name": "finger", "kind": "pluck", "on": {"part": "string", "at": [0.2]}, "time": 0.02},
+            "exciter (bow)": {"type": "exciter", "name": "bow", "kind": "bow", "on": {"part": "string", "at": [0.12]}, "pressure": 0.3},
             "listener": {"type": "listener", "name": "mic", "kind": "mic", "pos": [0.1, 0.4, 0.3]},
             "settings": {"type": "settings", "solver": "sav", "oversample": 2},
-            "score": {"type": "score", "events": [{"t": 0.05, "exciter": "pick", "strength": 1.5}]},
+            "score": {"type": "score", "events": [{"t": 0.05, "exciter": "pick", "strength": 1.5}, {"t": 1.0, "exciter": "bow", "strength": 0.2}, {"t": 2.5, "exciter": "bow", "strength": 0}]},
             "name": {"type": "name", "name": "guitar"},
             "delete": {"type": "delete", "kind": "joint", "name": "bridge"},
         });
@@ -454,16 +459,19 @@ impl Tools {
         ok(serde_json::to_string_pretty(&out).unwrap_or_default())
     }
 
-    /// Hit a point on a part with the roaming mallet, live: the human hears
-    /// it (when audio is on) and it is added to the take that `listen`
+    /// Excite a point on a part by hand, live: `kind` strike (a mallet, the
+    /// default), pluck (pull aside and let go) or bow (a stroke lasting
+    /// `duration` seconds; the call returns when the bow lifts). The human
+    /// hears it when audio is on, and it joins the take that `listen`
     /// replays. You get no measurement back; use `listen` for that.
     #[tool]
     async fn strike(&self, Parameters(s): Parameters<Strike>) -> Result<CallToolResult, ErrorData> {
-        reply(self.with(|app| {
-            let what = format!("struck {} at {:?} at {} m/s", s.part, s.at, s.speed);
+        let bow = (s.kind == HandKind::Bow).then(|| s.duration.clamp(0.05, 20.0));
+        let started = self.with(|app| {
+            let what = s.describe();
             app.strike_live(s)?;
             Ok(format!(
-                "{what}; strikes in the take: {}{}",
+                "{what}; actions in the take: {}{}",
                 app.take.len(),
                 if app.audio.is_some() {
                     ""
@@ -471,7 +479,15 @@ impl Tools {
                     " (audio is off: nobody heard it)"
                 }
             ))
-        }))
+        });
+        if let (Ok(_), Some(seconds)) = (&started, bow) {
+            tokio::time::sleep(Duration::from_secs_f64(seconds)).await;
+            let _ = self.with(|app| {
+                app.bow_stop();
+                Ok(())
+            });
+        }
+        reply(started)
     }
 
     /// Fire one of the scene's named exciters, live.
@@ -488,8 +504,11 @@ impl Tools {
                 .iter()
                 .find(|e| e.name == a.exciter)
                 .map(|e| e.kind);
+            use phys_core::scene::ExciterKind as K;
             let strength = a.strength.unwrap_or(match kind {
-                Some(phys_core::scene::ExciterKind::Impulse) => 0.01,
+                Some(K::Impulse) => 0.01,
+                Some(K::Pluck) => 0.003,
+                Some(K::Bow) => 0.2,
                 _ => 2.0,
             });
             app.excite(&a.exciter, strength)?;

@@ -165,8 +165,58 @@ struct Joint {
 
 #[derive(Clone, Debug)]
 enum Exciter {
-    Mallet { joint: usize, mode: usize },
-    Impulse { w: Wv },
+    Mallet {
+        joint: usize,
+        mode: usize,
+    },
+    Impulse {
+        w: Wv,
+    },
+    /// Index into `pushes`, and the seconds the pull takes.
+    Pluck {
+        push: usize,
+        time: f64,
+    },
+    /// Index into `bows`, and the bow's pressure, N.
+    Bow {
+        bow: usize,
+        pressure: f64,
+    },
+}
+
+/// A pluck: a force that rises smoothly, as a finger pulls the part aside,
+/// then lets go within a fraction of a millisecond.
+#[derive(Clone, Debug)]
+struct Push {
+    w: Wv,
+    force: f64,
+    t: usize,
+    rise: usize,
+    fall: usize,
+    on: bool,
+}
+
+/// How sharply bow friction falls once the part slips, s2/m2.
+const BOW_SHARPNESS: f64 = 100.0;
+
+/// A bow: friction against a surface moving at `speed`. The friction force
+/// is `pressure` x phi(v), v the part's speed relative to the bow, with
+/// phi(v) = sqrt(2a) v exp(-a v^2 + 1/2): it grips near v = 0 and lets go as
+/// the part slips. Each step it is treated as a damper on the relative
+/// speed with its coefficient frozen, which keeps the update explicit and
+/// cannot add energy beyond what the moving bow supplies (after Russo,
+/// Ducceschi and Bilbao, DAFx 2022).
+#[derive(Clone, Debug)]
+struct Bow {
+    w: Wv,
+    /// (linear joints)^-1 D w, dense: constant while the bow stays put.
+    h: Vec<f64>,
+    speed: f64,
+    pressure: f64,
+    speed_to: f64,
+    pressure_to: f64,
+    /// Scratch: this step's damper coefficient.
+    c: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -242,6 +292,17 @@ pub struct Sim {
     omega: Vec<f64>,
     /// The roaming mallet's place in `exciters`.
     hand: Option<usize>,
+    pushes: Vec<Push>,
+    bows: Vec<Bow>,
+    /// The roaming pluck and bow (`Opts::hand`).
+    hand_push: Option<usize>,
+    hand_bow: Option<usize>,
+    /// Scratch for the per-step rank update: which terms are active
+    /// (`usize::MAX` is the auxiliary variable, otherwise a bow), and the
+    /// small system they make.
+    terms: Vec<usize>,
+    small_m: Vec<f64>,
+    small_y: Vec<f64>,
     /// Modes that belong to parts (mallet masses come after).
     part_modes: usize,
 }
@@ -291,6 +352,46 @@ fn invert(a: &[f64], n: usize) -> Option<Vec<f64>> {
         }
     }
     Some(inv)
+}
+
+/// Solve the small dense system m y = y in place (r x r, row-major), by
+/// elimination with pivoting. A singular system leaves y at zero.
+fn solve_small(m: &mut [f64], y: &mut [f64], r: usize) {
+    for col in 0..r {
+        let mut best = col;
+        for row in col + 1..r {
+            if m[row * r + col].abs() > m[best * r + col].abs() {
+                best = row;
+            }
+        }
+        let p = m[best * r + col];
+        if !(p.is_finite() && p.abs() > 1e-300) {
+            y[..r].iter_mut().for_each(|x| *x = 0.0);
+            return;
+        }
+        if best != col {
+            for c in 0..r {
+                m.swap(best * r + c, col * r + c);
+            }
+            y.swap(best, col);
+        }
+        for row in col + 1..r {
+            let f = m[row * r + col] / p;
+            if f != 0.0 {
+                for c in col..r {
+                    m[row * r + c] -= f * m[col * r + c];
+                }
+                y[row] -= f * y[col];
+            }
+        }
+    }
+    for row in (0..r).rev() {
+        let mut v = y[row];
+        for c in row + 1..r {
+            v -= m[row * r + c] * y[c];
+        }
+        y[row] = v / m[row * r + row];
+    }
 }
 
 struct Pending {
@@ -450,15 +551,22 @@ impl Sim {
                 mallet: None,
             });
         }
-        // (index into `pending` for a mallet, or the impulse's part and weights)
-        let mut exciter_src: Vec<Result<usize, (usize, Vec<f64>)>> = Vec::new();
+        enum Src {
+            Mallet(usize),
+            Impulse(usize, Vec<f64>),
+            Pluck(usize, Vec<f64>, f64),
+            Bow(usize, Vec<f64>, f64),
+            HandPluck,
+            HandBow,
+        }
+        let mut exciter_src: Vec<Src> = Vec::new();
         for e in &scene.exciters {
             let on = find(&e.on)?;
             let dir = direction(e.dir, on);
             let w = bakes[on].weights(&e.on, dir);
             match e.kind {
                 ExciterKind::Mallet => {
-                    exciter_src.push(Ok(pending.len()));
+                    exciter_src.push(Src::Mallet(pending.len()));
                     pending.push(Pending {
                         name: format!("exciter `{}`", e.name),
                         a: None,
@@ -472,12 +580,14 @@ impl Sim {
                         mallet: Some(e.mass.unwrap_or(0.02)),
                     });
                 }
-                ExciterKind::Impulse => exciter_src.push(Err((on, w))),
+                ExciterKind::Impulse => exciter_src.push(Src::Impulse(on, w)),
+                ExciterKind::Pluck => exciter_src.push(Src::Pluck(on, w, e.time.unwrap_or(0.02))),
+                ExciterKind::Bow => exciter_src.push(Src::Bow(on, w, e.pressure.unwrap_or(0.3))),
             }
         }
 
         let hand_pending = opts.hand.then(|| {
-            exciter_src.push(Ok(pending.len()));
+            exciter_src.push(Src::Mallet(pending.len()));
             pending.push(Pending {
                 name: "the hand".to_string(),
                 a: None,
@@ -506,9 +616,13 @@ impl Sim {
             }
         }
         for src in &exciter_src {
-            if let Err((part, w)) = src {
+            if let Src::Impulse(part, w) | Src::Pluck(part, w, _) | Src::Bow(part, w, _) = src {
                 mark(*part, w);
             }
+        }
+        if opts.hand {
+            exciter_src.push(Src::HandPluck);
+            exciter_src.push(Src::HandBow);
         }
         let mut start = Vec::with_capacity(bakes.len());
         let mut n = 0usize;
@@ -713,20 +827,72 @@ impl Sim {
         }
 
         let mut exciters = Vec::new();
+        let mut pushes: Vec<Push> = Vec::new();
+        let mut bows: Vec<Bow> = Vec::new();
+        let (mut hand, mut hand_push, mut hand_bow) = (None, None, None);
+        let roaming = || {
+            Wv(vec![Seg {
+                start: 0,
+                w: Vec::with_capacity(part_modes),
+            }])
+        };
+        let new_push = |w: Wv| Push {
+            w,
+            force: 0.0,
+            t: 0,
+            rise: 1,
+            fall: 1,
+            on: false,
+        };
+        let new_bow = |w: Wv| Bow {
+            w,
+            h: vec![0.0; n],
+            speed: 0.0,
+            pressure: 0.0,
+            speed_to: 0.0,
+            pressure_to: 0.0,
+            c: 0.0,
+        };
         for src in exciter_src {
-            exciters.push(match src {
-                Ok(pi) => {
+            match src {
+                Src::Mallet(pi) => {
                     let (_, mode) = mallet_of[pi].ok_or("a mallet lost its mass")?;
-                    Exciter::Mallet {
+                    if hand_pending == Some(pi) {
+                        hand = Some(exciters.len());
+                    }
+                    exciters.push(Exciter::Mallet {
                         joint: placed[pi].1,
                         mode,
-                    }
+                    });
                 }
-                Err((part, w)) => Exciter::Impulse {
+                Src::Impulse(part, w) => exciters.push(Exciter::Impulse {
                     w: Wv(vec![compress(part, &w, 1.0)]),
-                },
-            });
+                }),
+                Src::Pluck(part, w, time) => {
+                    exciters.push(Exciter::Pluck {
+                        push: pushes.len(),
+                        time,
+                    });
+                    pushes.push(new_push(Wv(vec![compress(part, &w, 1.0)])));
+                }
+                Src::Bow(part, w, pressure) => {
+                    exciters.push(Exciter::Bow {
+                        bow: bows.len(),
+                        pressure,
+                    });
+                    bows.push(new_bow(Wv(vec![compress(part, &w, 1.0)])));
+                }
+                Src::HandPluck => {
+                    hand_push = Some(pushes.len());
+                    pushes.push(new_push(roaming()));
+                }
+                Src::HandBow => {
+                    hand_bow = Some(bows.len());
+                    bows.push(new_bow(roaming()));
+                }
+            }
         }
+        let rank = bows.len() + 1;
 
         let mut listeners = Vec::new();
         for l in &scene.listeners {
@@ -784,9 +950,15 @@ impl Sim {
             warnings,
         };
         let omega = hz.iter().map(|f| 2.0 * std::f64::consts::PI * f).collect();
-        let hand = hand_pending.map(|_| exciters.len() - 1);
         let mut sim = Sim {
             omega,
+            pushes,
+            bows,
+            hand_push,
+            hand_bow,
+            terms: Vec::with_capacity(rank),
+            small_m: vec![0.0; rank * rank],
+            small_y: vec![0.0; rank],
             hand,
             part_modes,
             sample_rate,
@@ -820,6 +992,9 @@ impl Sim {
             blown: false,
             info,
         };
+        for b in 0..sim.bows.len() {
+            sim.place_bow(b);
+        }
         sim.reset();
         Ok((sim, Rig { bakes, start, keep }))
     }
@@ -937,6 +1112,12 @@ impl Sim {
         }
         self.psi = (2.0 * v + self.gauge).sqrt();
         self.v_prev = v;
+        for p in &mut self.pushes {
+            p.on = false;
+        }
+        for b in &mut self.bows {
+            (b.speed, b.pressure, b.speed_to, b.pressure_to) = (0.0, 0.0, 0.0, 0.0);
+        }
         for l in &mut self.listeners {
             for t in &mut l.taps {
                 t.line.iter_mut().for_each(|x| *x = 0.0);
@@ -980,7 +1161,111 @@ impl Sim {
                     }
                 }
             }
+            Some(Exciter::Pluck { push, time }) => {
+                let (push, time) = (*push, *time);
+                self.start_push(push, strength, time);
+            }
+            Some(Exciter::Bow { bow, pressure }) => {
+                let b = &mut self.bows[*bow];
+                b.speed_to = strength;
+                b.pressure_to = if strength == 0.0 { 0.0 } else { *pressure };
+            }
             None => {}
+        }
+    }
+
+    /// Pull the port of push `i` aside by `pull` metres over `time` seconds,
+    /// then let go.
+    fn start_push(&mut self, i: usize, pull: f64, time: f64) {
+        let rate = 1.0 / self.k;
+        let p = &mut self.pushes[i];
+        // How far a steady newton moves the port: sum of w^2 / stiffness.
+        let mut give = 0.0;
+        for seg in &p.w.0 {
+            for (w, s) in seg.w.iter().zip(&self.stiff[seg.start..]) {
+                if *s > 0.0 {
+                    give += w * w / s;
+                }
+            }
+        }
+        if !(give > 0.0 && give.is_finite() && pull.is_finite()) {
+            return;
+        }
+        p.force = pull / give;
+        p.t = 0;
+        p.rise = ((time.clamp(0.001, 2.0) * rate) as usize).max(2);
+        p.fall = ((0.0004 * rate) as usize).max(2);
+        p.on = true;
+    }
+
+    /// Recompute what a bow needs after its weights changed.
+    fn place_bow(&mut self, i: usize) {
+        let b = &mut self.bows[i];
+        b.h.iter_mut().for_each(|x| *x = 0.0);
+        for seg in &b.w.0 {
+            let r = seg.start..seg.start + seg.w.len();
+            for ((h, d), w) in b.h[r.clone()].iter_mut().zip(&self.d[r]).zip(&seg.w) {
+                *h = d * w;
+            }
+        }
+        Self::solve_linear(
+            &self.linear,
+            &self.lin_m,
+            &mut self.lin_y,
+            &self.d,
+            &mut b.h,
+        );
+    }
+
+    /// Pluck a part with the roaming finger (needs `Opts::hand`): pull the
+    /// point `pull` metres aside over `time` seconds and let go. `start` and
+    /// `weights` come from `Rig`. Does not allocate.
+    pub fn pluck(&mut self, start: usize, weights: &[f64], pull: f64, time: f64) {
+        let Some(i) = self.hand_push else { return };
+        let Some(seg) = self.pushes[i].w.0.get_mut(0) else {
+            return;
+        };
+        if start + weights.len() > self.part_modes || weights.len() > seg.w.capacity() {
+            return;
+        }
+        seg.start = start;
+        seg.w.clear();
+        seg.w.extend_from_slice(weights);
+        self.start_push(i, pull, time);
+    }
+
+    /// Bow a part with the roaming bow (needs `Opts::hand`), or change the
+    /// bow already there: `speed` in m/s, `pressure` (the most friction it
+    /// can apply) in N. Keeps going until `bow_stop`. Does not allocate.
+    pub fn bow(&mut self, start: usize, weights: &[f64], speed: f64, pressure: f64) {
+        let Some(i) = self.hand_bow else { return };
+        let Some(seg) = self.bows[i].w.0.get_mut(0) else {
+            return;
+        };
+        if start + weights.len() > self.part_modes || weights.len() > seg.w.capacity() {
+            return;
+        }
+        if !(speed.is_finite() && pressure.is_finite() && pressure >= 0.0) {
+            return;
+        }
+        let moved = seg.start != start || seg.w != weights;
+        if moved {
+            seg.start = start;
+            seg.w.clear();
+            seg.w.extend_from_slice(weights);
+            self.place_bow(i);
+            // A bow lifted off one place lands on the next from rest.
+            self.bows[i].pressure = 0.0;
+        }
+        self.bows[i].speed_to = speed;
+        self.bows[i].pressure_to = pressure;
+    }
+
+    /// Lift the roaming bow.
+    pub fn bow_stop(&mut self) {
+        if let Some(i) = self.hand_bow {
+            self.bows[i].speed_to = 0.0;
+            self.bows[i].pressure_to = 0.0;
         }
     }
 
@@ -1093,64 +1378,133 @@ impl Sim {
                 self.psi = self.psi.clamp(0.0, top);
             }
             self.v_prev = v;
-            if active {
-                let root = (2.0 * v + self.gauge).sqrt();
-                self.g.iter_mut().for_each(|x| *x = 0.0);
-                for j in &self.nonlinear {
-                    if j.dv != 0.0 {
-                        j.w.add(&mut self.g, j.dv / root);
-                    }
-                }
-                let mut g_q1 = 0.0;
-                for (g, q1) in self.g.iter().zip(&self.q1) {
-                    g_q1 += g * q1;
-                }
-                let lead = self.psi - 0.25 * g_q1;
-                for (((qn, h), g), d) in self
-                    .qn
-                    .iter_mut()
-                    .zip(&mut self.h)
-                    .zip(&self.g)
-                    .zip(&self.d)
-                {
-                    *h = d * g;
-                    *qn -= *h * lead;
-                }
-                Self::solve_linear(
-                    &self.linear,
-                    &self.lin_m,
-                    &mut self.lin_y,
-                    &self.d,
-                    &mut self.h,
-                );
-                Self::solve_linear(
-                    &self.linear,
-                    &self.lin_m,
-                    &mut self.lin_y,
-                    &self.d,
-                    &mut self.qn,
-                );
-                let (mut g_p, mut g_h) = (0.0, 0.0);
-                for ((g, p), h) in self.g.iter().zip(&self.qn).zip(&self.h) {
-                    g_p += g * p;
-                    g_h += g * h;
-                }
-                let scale = 0.25 * g_p / (1.0 + 0.25 * g_h);
-                let mut g_qn = 0.0;
-                for ((qn, h), g) in self.qn.iter_mut().zip(&self.h).zip(&self.g) {
-                    *qn -= h * scale;
-                    g_qn += g * *qn;
-                }
-                self.psi += 0.5 * (g_qn - g_q1);
-            } else {
-                Self::solve_linear(
-                    &self.linear,
-                    &self.lin_m,
-                    &mut self.lin_y,
-                    &self.d,
-                    &mut self.qn,
-                );
+        }
+
+        // Plucks: a force that swells, then lets go.
+        for p in &mut self.pushes {
+            if !p.on {
+                continue;
             }
+            let f = if p.t < p.rise {
+                0.5 - 0.5 * (std::f64::consts::PI * p.t as f64 / p.rise as f64).cos()
+            } else {
+                0.5 + 0.5 * (std::f64::consts::PI * (p.t - p.rise) as f64 / p.fall as f64).cos()
+            };
+            p.w.push(&mut self.qn, &self.d, p.force * f);
+            p.t += 1;
+            p.on = p.t < p.rise + p.fall;
+        }
+
+        // Bows: this step's damper coefficient, and the part of the damper
+        // force that does not depend on the new state.
+        self.terms.clear();
+        let glide = 1.0 - (-k / 0.004).exp();
+        for (i, b) in self.bows.iter_mut().enumerate() {
+            b.pressure += glide * (b.pressure_to - b.pressure);
+            b.speed += glide * (b.speed_to - b.speed);
+            b.c = 0.0;
+            if b.pressure < 1e-7 {
+                continue;
+            }
+            let rel = b.w.dot_diff(&self.q, &self.q1) / k - b.speed;
+            let grip = (2.0 * BOW_SHARPNESS).sqrt() * (0.5 - BOW_SHARPNESS * rel * rel).exp();
+            b.c = b.pressure * grip;
+            if b.c > 1e-12 {
+                let y1 = b.w.dot(&self.q1);
+                b.w.push(&mut self.qn, &self.d, b.c * (y1 / (2.0 * k) + b.speed));
+                self.terms.push(i);
+            }
+        }
+
+        let mut g_q1 = 0.0;
+        let sav = self.solver == Solver::Sav && active;
+        if sav {
+            let root = (2.0 * v + self.gauge).sqrt();
+            self.g.iter_mut().for_each(|x| *x = 0.0);
+            for j in &self.nonlinear {
+                if j.dv != 0.0 {
+                    j.w.add(&mut self.g, j.dv / root);
+                }
+            }
+            for (g, q1) in self.g.iter().zip(&self.q1) {
+                g_q1 += g * q1;
+            }
+            let lead = self.psi - 0.25 * g_q1;
+            for (((qn, h), g), d) in self
+                .qn
+                .iter_mut()
+                .zip(&mut self.h)
+                .zip(&self.g)
+                .zip(&self.d)
+            {
+                *h = d * g;
+                *qn -= *h * lead;
+            }
+            Self::solve_linear(
+                &self.linear,
+                &self.lin_m,
+                &mut self.lin_y,
+                &self.d,
+                &mut self.h,
+            );
+            self.terms.push(usize::MAX);
+        }
+        Self::solve_linear(
+            &self.linear,
+            &self.lin_m,
+            &mut self.lin_y,
+            &self.d,
+            &mut self.qn,
+        );
+
+        // What is left is the linear system plus one rank-one term per bow
+        // and one for the auxiliary variable: each is alpha (D a) a^T. With
+        // p the solution without them and h = A^-1 D a, the answer is
+        // p - sum y h, where (diag(1 / alpha) + a^T h) y = a^T p.
+        let r = self.terms.len();
+        if r > 0 {
+            let dot = |g: &[f64], bows: &[Bow], term: usize, x: &[f64]| -> f64 {
+                if term == usize::MAX {
+                    g.iter().zip(x).map(|(a, b)| a * b).sum()
+                } else {
+                    bows[term].w.dot(x)
+                }
+            };
+            for i in 0..r {
+                let ti = self.terms[i];
+                self.small_y[i] = dot(&self.g, &self.bows, ti, &self.qn);
+                for j in 0..r {
+                    let tj = self.terms[j];
+                    let hj: &[f64] = if tj == usize::MAX {
+                        &self.h
+                    } else {
+                        &self.bows[tj].h
+                    };
+                    self.small_m[i * r + j] = dot(&self.g, &self.bows, ti, hj);
+                }
+                self.small_m[i * r + i] += if ti == usize::MAX {
+                    4.0
+                } else {
+                    2.0 * k / self.bows[ti].c
+                };
+            }
+            solve_small(&mut self.small_m, &mut self.small_y, r);
+            for j in 0..r {
+                let tj = self.terms[j];
+                let y = self.small_y[j];
+                let hj: &[f64] = if tj == usize::MAX {
+                    &self.h
+                } else {
+                    &self.bows[tj].h
+                };
+                for (qn, h) in self.qn.iter_mut().zip(hj) {
+                    *qn -= y * h;
+                }
+            }
+        }
+        if sav {
+            let g_qn: f64 = self.g.iter().zip(&self.qn).map(|(g, q)| g * q).sum();
+            self.psi += 0.5 * (g_qn - g_q1);
         }
 
         std::mem::swap(&mut self.q1, &mut self.q);

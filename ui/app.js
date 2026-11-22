@@ -20,6 +20,8 @@ let doc = null;          // the last "scene" message
 let sel = null;          // {kind: 'part' | 'joint' | 'exciter' | 'listener', name}
 let tool = 'select';
 let jointFrom = null;    // first port of a joint being drawn
+let hand = 'strike';     // how the Play tool excites: strike, pluck or bow
+let bowing = null;       // the port being bowed while the mouse is down
 let amps = [];           // latest mode amplitudes, in display order
 let ws = null;
 
@@ -352,12 +354,31 @@ function flash(point, color = SELECTED) {
   marks.add(ring);
 }
 
+/** The Play panel's settings as the fields of a strike message. */
 function mallet() {
+  if (hand === 'pluck') return { kind: 'pluck', pull: Number($('pull').value) / 1000 };
+  if (hand === 'bow') {
+    return { kind: 'bow', speed: Number($('bowspeed').value), pressure: Math.pow(10, Number($('pressure').value)) };
+  }
   return {
+    kind: 'strike',
     speed: Number($('speed').value),
     stiffness: Math.pow(10, Number($('hard').value)),
     mass: Math.pow(10, Number($('mass').value)),
   };
+}
+
+function setHand(h) {
+  hand = h;
+  for (const b of $('hand').children) b.classList.toggle('on', b.dataset.hand === h);
+  for (const box of document.querySelectorAll('#strikebox [data-for]')) box.style.display = box.dataset.for === h ? '' : 'none';
+}
+
+function stopBow() {
+  if (!bowing) return;
+  bowing = null;
+  orbit.enabled = true;
+  send({ type: 'bow_stop' });
 }
 
 function freshName(base, list) {
@@ -370,16 +391,29 @@ let down = null;
 renderer.domElement.addEventListener('pointerdown', (e) => {
   down = { x: e.clientX, y: e.clientY };
   gizmoUsed = false;
+  if (tool === 'strike' && hand === 'bow' && e.button === 0 && doc) {
+    // The bow sounds for as long as the button is held.
+    const hit = hitAt(e);
+    const port = portFromHit(hit);
+    if (!port) return;
+    bowing = port;
+    orbit.enabled = false;
+    send({ type: 'strike', ...port, ...mallet() });
+    flash(hit.point, 0x5aa2e8);
+  }
 });
+window.addEventListener('pointerup', stopBow);
+window.addEventListener('blur', stopBow);
 renderer.domElement.addEventListener('pointerup', (e) => {
   if (!down || !doc) return;
   const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4;
   down = null;
+  if (hand === 'bow' && tool === 'strike') return;
   if (moved || gizmoUsed || e.button !== 0) return;
   const hit = hitAt(e);
   const port = portFromHit(hit);
   if (tool === 'strike') {
-    if (!port) return;
+    if (!port || hand === 'bow') return;
     send({ type: 'strike', ...port, ...mallet() });
     flash(hit.point);
   } else if (tool === 'joint') {
@@ -553,7 +587,15 @@ function renderInspector() {
       box.append(num('Stiffness', item.stiffness, (v) => set({ stiffness: v }), '1e8'));
       box.append(num('Damping', item.damping, (v) => set({ damping: v }), '0.3'));
     }
-    box.append(el('div', { class: 'row' }, el('button', { onclick: () => send({ type: 'excite', exciter: item.name, strength: item.kind === 'mallet' ? 2 : 0.01 }) }, 'Fire')));
+    if (item.kind === 'pluck') box.append(num('Pull time s', item.time, (v) => set({ time: v }), '0.02'));
+    if (item.kind === 'bow') box.append(num('Pressure N', item.pressure, (v) => set({ pressure: v }), '0.3'));
+    const fire = (strength) => () => send({ type: 'excite', exciter: item.name, strength });
+    if (item.kind === 'bow') {
+      box.append(el('div', { class: 'row' }, el('button', { onclick: fire(0.2) }, 'Bow'), el('button', { onclick: fire(0) }, 'Lift')));
+    } else {
+      const strength = { mallet: 2, impulse: 0.01, pluck: 0.003 }[item.kind];
+      box.append(el('div', { class: 'row' }, el('button', { onclick: fire(strength) }, 'Fire')));
+    }
   } else {
     if (item.kind === 'mic') box.append(triple('Position', item.pos, (v) => set({ pos: v })));
     else box.append(el('div', { class: 'note' }, `pickup on ${item.on.part} [${item.on.at.join(', ')}]`));
@@ -691,9 +733,20 @@ function malletLabels() {
   const h = Number($('hard').value);
   $('hard_out').textContent = h < 6.5 ? 'felt' : h < 7.5 ? 'rubber' : h < 8.5 ? 'wood' : h < 9.5 ? 'hard plastic' : 'steel';
   $('mass_out').textContent = `${(Math.pow(10, Number($('mass').value)) * 1000).toFixed(0)} g`;
+  $('pull_out').textContent = `${Number($('pull').value).toFixed(1)} mm`;
+  $('bowspeed_out').textContent = `${Number($('bowspeed').value).toFixed(2)} m/s`;
+  $('pressure_out').textContent = `${Math.pow(10, Number($('pressure').value)).toFixed(2)} N`;
 }
-for (const id of ['speed', 'hard', 'mass']) $(id).addEventListener('input', malletLabels);
+for (const id of ['speed', 'hard', 'mass', 'pull', 'bowspeed', 'pressure']) {
+  $(id).addEventListener('input', () => {
+    malletLabels();
+    // Moving a bow slider while bowing changes the stroke under way.
+    if (bowing) send({ type: 'strike', ...bowing, ...mallet() });
+  });
+}
 malletLabels();
+for (const b of $('hand').children) b.addEventListener('click', () => setHand(b.dataset.hand));
+setHand('strike');
 
 window.addEventListener('keydown', (e) => {
   if (e.target.matches('input, select, textarea')) return;
@@ -737,4 +790,4 @@ connect();
 requestAnimationFrame(frame);
 
 // For driving the page from a console or a test.
-window.phys = { send, world, animateVibration, get doc() { return doc; }, get amps() { return amps; }, setTool, select: (kind, name) => { sel = { kind, name }; applySelection(); renderInspector(); } };
+window.phys = { send, world, animateVibration, setHand, get doc() { return doc; }, get amps() { return amps; }, setTool, select: (kind, name) => { sel = { kind, name }; applySelection(); renderInspector(); } };
