@@ -20,6 +20,14 @@ rmcp = { version = "1", features = ["server", "transport-io", "macros"] }
 schemars.workspace = true
 png = "0.18"
 base64 = "0.22"
+wry = { version = "0.57.2", optional = true }
+tao = { version = "0.37.2", optional = true }
+muda = { version = "0.17", optional = true }
+
+[features]
+default = ["window"]
+# The desktop window (`phys app`). Without it the editor is browser-only.
+window = ["dep:wry", "dep:tao", "dep:muda"]
 
 [lints]
 workspace = true

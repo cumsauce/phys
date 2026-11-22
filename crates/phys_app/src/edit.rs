@@ -562,6 +562,7 @@ async fn client(mut sock: WebSocket, app: Shared) {
     if sock.send(Message::Text(hello.into())).await.is_err() {
         return;
     }
+    eprintln!("phys: an editor page connected");
     loop {
         tokio::select! {
             incoming = sock.recv() => {
@@ -714,6 +715,25 @@ pub(crate) async fn serve(shared: Shared, port: u16) -> Result<(), String> {
         .await
         .map_err(|e| format!("port {port}: {e}"))?;
     eprintln!("phys editor: http://localhost:{port}");
+    axum::serve(listener, router)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Serve the editor page on a listener that is already bound (the desktop
+/// window binds a free port first, so it knows where to point).
+#[cfg(feature = "window")]
+pub(crate) async fn serve_on(
+    shared: Shared,
+    listener: std::net::TcpListener,
+) -> Result<(), String> {
+    let router = Router::new()
+        .route("/", get(index))
+        .route("/ws", get(socket))
+        .route("/{*path}", get(asset))
+        .with_state(shared);
+    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+    let listener = tokio::net::TcpListener::from_std(listener).map_err(|e| e.to_string())?;
     axum::serve(listener, router)
         .await
         .map_err(|e| e.to_string())

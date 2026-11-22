@@ -8,6 +8,24 @@ Status: milestones 1 to 4 of the plan (physics core, offline render, real-time p
 
 ## Run
 
+As a desktop app (macOS):
+
+```bash
+scripts/bundle-macos.sh --install
+```
+
+builds `phys.app` and copies it to /Applications. It is not signed, so the first time right-click it and choose Open. Opened this way it keeps its files (saved scenes, rendered takes) in `~/Music/phys`.
+
+From a terminal, the same window:
+
+```bash
+cargo run --release
+```
+
+`cargo run --release -- app scene.json` opens a scene file. Closing the window quits.
+
+In a browser instead:
+
 ```bash
 cargo run --release -- edit
 ```
@@ -109,6 +127,9 @@ The `explicit` solver (`"settings": {"solver": "explicit"}`) applies joint force
 The state is double precision and nothing is hand-vectorised yet.
 
 ## Known limits
+
+- The desktop window has no File menu: a scene is opened by passing its path, and Save writes to that path (or `phys-scene.json`).
+- The MCP server does not open the desktop window; it serves the page for a browser.
 
 - Plates are simply supported; a free-edge plate is not modelled.
 - Parts do not move as rigid bodies: a bar rings but does not bounce or fall.

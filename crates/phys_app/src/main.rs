@@ -3,6 +3,7 @@
 //!   phys render <scene.json> [out.wav] [--seconds 3] [--rate 48000]
 //!               [--solver sav|explicit] [--oversample N] [--raw]
 //!   phys play <scene.json> [--seconds N] [--gain dB]
+//!   phys [app] [scene.json] [--no-audio]
 //!   phys edit [scene.json] [--port 7878] [--no-audio]
 //!   phys mcp [scene.json] [--port 7878] [--no-audio] [--headless]
 //!   phys info <scene.json>
@@ -13,6 +14,8 @@ use std::time::Instant;
 
 mod edit;
 mod mcp;
+#[cfg(feature = "window")]
+mod window;
 
 use phys_core::render::render_with;
 use phys_core::scene::{Scene, Solver};
@@ -21,11 +24,13 @@ use phys_core::sim::Sim;
 const USAGE: &str = "usage:
   phys render <scene.json> [out.wav] [--seconds 3] [--rate 48000] [--solver sav|explicit] [--oversample N] [--raw]
   phys play <scene.json> [--seconds N] [--gain dB]
+  phys [app] [scene.json] [--no-audio]
   phys edit [scene.json] [--port 7878] [--no-audio]
   phys mcp [scene.json] [--port 7878] [--no-audio] [--headless]
   phys info <scene.json>
 
 mcp serves the MCP tools on stdio and the editor page alongside (--headless: tools only).
+app (or no command at all) opens the 3D editor in its own window.
 edit opens the 3D editor in a browser tab at http://localhost:7878.
 render writes a WAV normalised to -6 dBFS; --raw keeps the simulation's own level.
 play runs the scene live on the default output: it plays the score, then takes
@@ -49,7 +54,8 @@ struct Args {
 
 fn parse() -> Result<Args, String> {
     let mut it = std::env::args().skip(1);
-    let command = it.next().ok_or(USAGE)?;
+    // No command at all (a double-clicked app) opens the window.
+    let command = it.next().unwrap_or_else(|| "app".to_string());
     let mut args = Args {
         command,
         scene: PathBuf::new(),
@@ -106,7 +112,7 @@ fn parse() -> Result<Args, String> {
         }
     }
     let mut free = free.into_iter();
-    if args.command == "edit" || args.command == "mcp" {
+    if matches!(args.command.as_str(), "edit" | "mcp" | "app") {
         args.scene = free.next().map(PathBuf::from).unwrap_or_default();
         return Ok(args);
     }
@@ -257,6 +263,15 @@ fn play(args: &Args, scene: &Scene) -> Result<(), String> {
 
 fn run() -> Result<(), String> {
     let args = parse()?;
+    if args.command == "app" {
+        #[cfg(feature = "window")]
+        {
+            let path = (!args.scene.as_os_str().is_empty()).then(|| args.scene.clone());
+            return window::run(path, args.audio);
+        }
+        #[cfg(not(feature = "window"))]
+        return Err("this build has no desktop window: use `phys edit` and a browser".into());
+    }
     if args.command == "edit" || args.command == "mcp" {
         let path = (!args.scene.as_os_str().is_empty()).then(|| args.scene.clone());
         return if args.command == "edit" {
