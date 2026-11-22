@@ -1,8 +1,8 @@
 // The panel on the right: the numbers of whatever is selected, or the
 // scene's outline when nothing is.
 
-import { S, $, hooks, MATERIALS, clone, findItem, select } from './state.js';
-import { ops, send } from './net.js';
+import { S, $, hooks, MATERIALS, clone, findItem, select, noteText, parseNote, round } from './state.js';
+import { ops, send, toast } from './net.js';
 import { duplicate, repeat, remove, rename } from './build.js';
 import { bindKey } from './play.js';
 
@@ -106,7 +106,9 @@ function partFields(box, item, set) {
     set({ shape });
   };
   const info = S.doc.parts[S.doc.scene.parts.indexOf(item)];
-  box.append(el('div', { class: 'note' }, `${sh.kind}, ${info.modes} modes, lowest ${info.hz[0]?.toFixed(1) ?? '?'} Hz`));
+  // What it is meant to sound at: its own lowest mode, before any tuning correction.
+  const low = info.hz[0] / (item.tune ?? 1);
+  box.append(el('div', { class: 'note' }, `${sh.kind}, ${info.modes} modes${low > 0 ? `, lowest ${low.toFixed(1)} Hz (${noteText(low)})` : ''}`));
   if (sh.kind !== 'mass') {
     box.append(choice('Material', typeof item.material === 'string' ? item.material : 'steel', MATERIALS, (v) => set({ material: v })));
   }
@@ -114,7 +116,7 @@ function partFields(box, item, set) {
     box.append(num('Length m', sh.length, (v) => setShape({ length: v })));
     box.append(num('Radius m', sh.radius, (v) => setShape({ radius: v }), '0.0005'));
     if (sh.tension != null) box.append(num('Tension N', sh.tension, (v) => setShape({ tension: v })));
-    else box.append(num('Pitch Hz', sh.f0, (v) => setShape({ f0: v })));
+    else pitchFields(box, sh.f0, (v) => setShape({ f0: v }));
   } else if (sh.kind === 'bar') {
     box.append(num('Length m', sh.length, (v) => setShape({ length: v })));
     box.append(num('Width m', sh.width, (v) => setShape({ width: v })));
@@ -127,7 +129,7 @@ function partFields(box, item, set) {
   } else if (sh.kind === 'membrane') {
     box.append(num('Radius m', sh.radius, (v) => setShape({ radius: v })));
     if (sh.tension != null) box.append(num('Tension N/m', sh.tension, (v) => setShape({ tension: v })));
-    else box.append(num('Pitch Hz', sh.f0, (v) => setShape({ f0: v })));
+    else pitchFields(box, sh.f0, (v) => setShape({ f0: v }));
   } else {
     box.append(num('Mass kg', sh.mass, (v) => setShape({ mass: v })));
   }
@@ -138,6 +140,8 @@ function partFields(box, item, set) {
     box.append(num('Damping 1/s', item.damping, (v) => set({ damping: v }), '1'));
     box.append(num('Max modes', item.modes, (v) => set({ modes: v }), '96', 4));
   }
+
+  if (pitched(item)) tuneFields(box, item, set);
 
   // Make more of it.
   box.append(el('h2', {}, 'Repeat'));
@@ -150,6 +154,30 @@ function partFields(box, item, set) {
   if (sh.kind !== 'plate' && sh.kind !== 'mass') box.append(el('label', {}, 'Semitones', semis));
   box.append(el('div', { class: 'note' }, 'Each copy brings its joints, pickups and play points along.'));
   box.append(row(button('Repeat', () => repeat(item.name, Number(count.value), gap.map((g) => Number(g.value)), Number(semis.value)))));
+}
+
+/** A pitch as hertz and as a note name; typing either sets the other. */
+function pitchFields(box, hz, set) {
+  box.append(num('Pitch Hz', hz, set));
+  const note = el('input', { type: 'text', value: noteText(hz), title: 'A note name, like E2, F#3 or Bb4' });
+  note.addEventListener('change', () => {
+    const want = parseNote(note.value);
+    if (want) set(round(want, 1000));
+    else { toast(`"${note.value}" is not a note: try E2, F#3 or Bb4`, true); note.value = noteText(hz); }
+  });
+  box.append(el('label', {}, 'Note', note));
+}
+
+/** Whether a part has a pitch worth tuning. */
+const pitched = (part) => ['string', 'bar', 'membrane'].includes(part.shape.kind);
+
+function tuneFields(box, item, set) {
+  box.append(el('h2', {}, 'Tuning'));
+  const off = item.tune ? `Corrected by ${((item.tune - 1) * 100).toFixed(2)}% so it sounds at its pitch once its joints pull on it.` : 'Anything tied to it pulls its pitch off. Tune measures that and corrects it.';
+  box.append(el('div', { class: 'note' }, off));
+  const buttons = [button('Tune', () => { toast('tuning…'); send({ type: 'tune', parts: [item.name] }); })];
+  if (item.tune) buttons.push(button('Clear', () => set({ tune: undefined })));
+  box.append(row(...buttons));
 }
 
 function jointFields(box, item, set) {
@@ -234,7 +262,14 @@ function outline(box) {
       onclick: (e) => { hooks.setTool?.('select'); select([{ kind, name: x.name }], e.shiftKey); },
     }, x.name + ' ', el('small', {}, describe(x))))));
   };
-  section('Parts', 'part', s.parts, (p) => p.shape.kind);
+  section('Parts', 'part', s.parts, (p) => {
+    const hz = S.doc.parts[s.parts.indexOf(p)]?.hz[0] / (p.tune ?? 1);
+    return `${p.shape.kind}${pitched(p) && hz > 0 ? ` · ${noteText(p.shape.f0 ?? hz)}` : ''}${p.tune ? ' · tuned' : ''}`;
+  });
+  if (s.parts.some(pitched)) {
+    box.append(row(button('Tune all', () => { toast('tuning…'); send({ type: 'tune' }); })));
+    box.append(el('div', { class: 'note' }, 'Corrects every string, bar and membrane so it sounds at its pitch. Run it again after changing joints.'));
+  }
   section('Joints', 'joint', s.joints, (j) => `${j.kind} ${j.a.part}–${j.b?.part ?? 'ground'}`);
   section('Play points', 'exciter', s.exciters, (e) => `${e.kind} on ${e.on.part}${e.key ? ` · key ${e.key.toUpperCase()}` : ''}${e.note != null ? ` · note ${e.note}` : ''}`);
   section('Listeners', 'listener', s.listeners, (l) => l.kind);

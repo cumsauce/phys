@@ -109,6 +109,11 @@ pub struct Part {
     /// Most modes kept. Default 96.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modes: Option<usize>,
+    /// A correction that multiplies every mode frequency, so the part
+    /// sounds at the pitch it was given once its joints pull on it. Set by
+    /// the editor's Tune action; near 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tune: Option<f64>,
 }
 
 /// How the ends of a bar are held.
@@ -448,6 +453,7 @@ impl Scene {
             finite(&format!("part `{n}`: rot"), &p.rot)?;
             range(&format!("part `{n}`: loss"), p.loss, 0.0, 2.0)?;
             range(&format!("part `{n}`: damping"), p.damping, 0.0, 1e4)?;
+            range(&format!("part `{n}`: tune"), p.tune, 0.5, 2.0)?;
             range(
                 &format!("part `{n}`: modes"),
                 p.modes.map(|m| m as f64),

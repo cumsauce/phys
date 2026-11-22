@@ -127,12 +127,15 @@ pub struct Core {
     shared: Arc<Shared>,
     scratch: Vec<f32>,
     sample_rate: f64,
+    /// The simulation's probe signal (the part last played), for a tuner.
+    heard: Producer<f32>,
 }
 
 /// The control side: send commands, read status.
 pub struct Control {
     commands: Producer<Command>,
     trash: Consumer<Trash>,
+    heard: Consumer<f32>,
     shared: Arc<Shared>,
 }
 
@@ -140,6 +143,7 @@ pub struct Control {
 pub fn pair(sim: Sim, gain: f32) -> (Core, Control) {
     let (ctx, crx) = RingBuffer::new(1024);
     let (ttx, trx) = RingBuffer::new(16);
+    let (htx, hrx) = RingBuffer::new(1 << 15);
     let shared = Arc::new(Shared::default());
     let sample_rate = sim.sample_rate();
     (
@@ -152,10 +156,12 @@ pub fn pair(sim: Sim, gain: f32) -> (Core, Control) {
             shared: shared.clone(),
             scratch: vec![0.0; 2 * BLOCK],
             sample_rate,
+            heard: htx,
         },
         Control {
             commands: ctx,
             trash: trx,
+            heard: hrx,
             shared,
         },
     )
@@ -217,6 +223,12 @@ impl Core {
         let mut peak = 0.0f32;
         for chunk in out.chunks_mut(2 * BLOCK) {
             self.sim.process(chunk);
+            for s in self.sim.probe() {
+                // When nobody is reading, the newest samples are dropped.
+                if self.heard.push(*s).is_err() {
+                    break;
+                }
+            }
             if let Some((old, left)) = self.old.as_mut() {
                 // Crossfade: the new simulation in, the old one out.
                 let frames = chunk.len() / 2;
@@ -289,6 +301,13 @@ impl Control {
                 .get(i)
                 .map_or(0.0, |a| f32::from_bits(a.load(Ordering::Relaxed)))
         }));
+    }
+
+    /// Move what the probe has heard since the last call onto the end of `out`.
+    pub fn heard(&mut self, out: &mut Vec<f32>) {
+        while let Ok(s) = self.heard.pop() {
+            out.push(s);
+        }
     }
 
     /// Read the meters (resetting the peaks) and free retired simulations.

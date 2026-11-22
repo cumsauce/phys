@@ -66,6 +66,7 @@ pub fn bake(part: &Part, max_hz: f64) -> Result<Bake, String> {
     }
     let loss = part.loss.unwrap_or(mat.loss);
     let floor = part.damping.unwrap_or(if is_mass { 0.0 } else { 1.0 });
+    let tune = part.tune.unwrap_or(1.0);
     let modes = (0..n)
         .map(|k| {
             // The net volume a mode moves radiates at any frequency; the
@@ -74,8 +75,8 @@ pub fn bake(part: &Part, max_hz: f64) -> Result<Bake, String> {
             let net_k: f64 = net[k];
             let sign = if net_k < 0.0 { -1.0 } else { 1.0 };
             Mode {
-                hz: t.hz[k],
-                sigma: floor + std::f64::consts::PI * t.hz[k] * loss,
+                hz: t.hz[k] * tune,
+                sigma: floor + std::f64::consts::PI * t.hz[k] * tune * loss,
                 mass: mass[k],
                 rad: sign * (net_k.abs() + 0.3 * (area * sq[k]).sqrt()),
             }
@@ -120,6 +121,7 @@ mod tests {
             loss: None,
             damping: None,
             modes: None,
+            tune: None,
         }
     }
 

@@ -182,3 +182,4 @@ aside .pair button { padding: 3px 6px; }
 }
 .dim { color: var(--dim); }
 #midi.lit { color: var(--accent); }
+#tuner { font-variant-numeric: tabular-nums; min-width: 150px; }

@@ -71,3 +71,33 @@ export function select(items, add = false) {
 export function pruneSelection() {
   S.sel = S.sel.filter((s) => findItem(s));
 }
+
+// ---------------------------------------------------------------- note names
+
+const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+/** A frequency as the nearest note and how many cents off it is (A4 = 440 Hz). */
+export function noteOf(hz) {
+  if (!(hz > 0)) return null;
+  const midi = 69 + 12 * Math.log2(hz / 440);
+  const nearest = Math.round(midi);
+  return { name: `${NAMES[((nearest % 12) + 12) % 12]}${Math.floor(nearest / 12) - 1}`, cents: Math.round((midi - nearest) * 100), midi: nearest };
+}
+
+/** "G3 +4c", or just "G3" when it is on the note. */
+export function noteText(hz) {
+  const n = noteOf(hz);
+  if (!n) return '';
+  return n.cents ? `${n.name} ${n.cents > 0 ? '+' : '−'}${Math.abs(n.cents)}c` : n.name;
+}
+
+/** A note name ("e2", "F#3", "Bb4", optionally with cents: "A4 +10") as a
+ *  frequency, or null when it is not one. */
+export function parseNote(text) {
+  const m = /^\s*([a-gA-G])\s*([#b♯♭]?)\s*(-?\d)\s*(?:([+\-−]\s*\d+(?:\.\d+)?)\s*c?)?\s*$/.exec(text);
+  if (!m) return null;
+  const semis = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 }[m[1].toLowerCase()] + ({ '#': 1, '♯': 1, b: -1, '♭': -1 }[m[2]] ?? 0);
+  const midi = 12 * (Number(m[3]) + 1) + semis;
+  const cents = m[4] ? Number(m[4].replace('−', '-').replace(/\s/g, '')) : 0;
+  return 440 * Math.pow(2, (midi - 69 + cents / 100) / 12);
+}

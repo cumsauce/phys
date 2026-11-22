@@ -196,6 +196,9 @@ struct Push {
     on: bool,
 }
 
+/// Most probe samples kept from one `process` call.
+const PROBE: usize = 8192;
+
 /// How sharply bow friction falls once the part slips, s2/m2.
 const BOW_SHARPNESS: f64 = 100.0;
 
@@ -294,6 +297,12 @@ pub struct Sim {
     hand: Option<usize>,
     pushes: Vec<Push>,
     bows: Vec<Bow>,
+    /// What each exciter acts on (empty for the roaming ones).
+    probes: Vec<Wv>,
+    /// The spot last played: the probe reads the surface speed there.
+    probe: Wv,
+    /// The probe's signal over the last `process` call.
+    probe_buf: Vec<f32>,
     /// The roaming pluck and bow (`Opts::hand`).
     hand_push: Option<usize>,
     hand_bow: Option<usize>,
@@ -837,6 +846,8 @@ impl Sim {
         }
 
         let mut exciters = Vec::new();
+        // What each exciter acts on, for the probe.
+        let mut probes: Vec<Wv> = Vec::new();
         let mut pushes: Vec<Push> = Vec::new();
         let mut bows: Vec<Bow> = Vec::new();
         let (mut hand, mut hand_push, mut hand_bow) = (None, None, None);
@@ -870,15 +881,23 @@ impl Sim {
                     if hand_pending == Some(pi) {
                         hand = Some(exciters.len());
                     }
+                    probes.push(match &pending[pi].b {
+                        Some((part, w)) => Wv(vec![compress(*part, w, 1.0)]),
+                        None => Wv::default(),
+                    });
                     exciters.push(Exciter::Mallet {
                         joint: placed[pi].1,
                         mode,
                     });
                 }
-                Src::Impulse(part, w) => exciters.push(Exciter::Impulse {
-                    w: Wv(vec![compress(part, &w, 1.0)]),
-                }),
+                Src::Impulse(part, w) => {
+                    probes.push(Wv(vec![compress(part, &w, 1.0)]));
+                    exciters.push(Exciter::Impulse {
+                        w: Wv(vec![compress(part, &w, 1.0)]),
+                    });
+                }
                 Src::Pluck(part, w, time) => {
+                    probes.push(Wv(vec![compress(part, &w, 1.0)]));
                     exciters.push(Exciter::Pluck {
                         push: pushes.len(),
                         time,
@@ -886,6 +905,7 @@ impl Sim {
                     pushes.push(new_push(Wv(vec![compress(part, &w, 1.0)])));
                 }
                 Src::Bow(part, w, pressure) => {
+                    probes.push(Wv(vec![compress(part, &w, 1.0)]));
                     exciters.push(Exciter::Bow {
                         bow: bows.len(),
                         pressure,
@@ -964,6 +984,12 @@ impl Sim {
             omega,
             pushes,
             bows,
+            probes,
+            probe: Wv(vec![Seg {
+                start: 0,
+                w: Vec::with_capacity(part_modes),
+            }]),
+            probe_buf: Vec::with_capacity(PROBE),
             hand_push,
             hand_bow,
             terms: Vec::with_capacity(rank),
@@ -1124,6 +1150,7 @@ impl Sim {
         };
         self.mass[mode] = mass;
         self.d[mode] = self.k * self.k / mass;
+        Self::listen_at(&mut self.probe, start, weights);
         let mobility = j.w.mobility(&self.mass);
         j.m_eff = 1.0 / mobility;
         self.launch(joint, mode, speed);
@@ -1191,6 +1218,9 @@ impl Sim {
     /// Fire an exciter. Mallet: `strength` is its speed, m/s. Impulse: N.s.
     pub fn excite(&mut self, exciter: usize, strength: f64) {
         let k = self.k;
+        if let Some(Seg { start, w }) = self.probes.get(exciter).and_then(|p| p.0.first()) {
+            Self::listen_at(&mut self.probe, *start, w);
+        }
         match self.exciters.get(exciter) {
             Some(Exciter::Mallet { joint, mode }) => {
                 let (joint, mode) = (*joint, *mode);
@@ -1217,6 +1247,24 @@ impl Sim {
             }
             None => {}
         }
+    }
+
+    /// Point the probe at a spot: `weights` over the modes from `start`.
+    fn listen_at(probe: &mut Wv, start: usize, weights: &[f64]) {
+        if let Some(seg) = probe.0.get_mut(0)
+            && weights.len() <= seg.w.capacity()
+        {
+            seg.start = start;
+            seg.w.clear();
+            seg.w.extend_from_slice(weights);
+        }
+    }
+
+    /// The surface speed at the spot last played, one sample per frame of
+    /// the last `process` call (up to 8192): a clean signal of one part, for
+    /// a tuner.
+    pub fn probe(&self) -> &[f32] {
+        &self.probe_buf
     }
 
     /// Pull the port of push `i` aside by `pull` metres over `time` seconds,
@@ -1276,6 +1324,7 @@ impl Sim {
         seg.start = start;
         seg.w.clear();
         seg.w.extend_from_slice(weights);
+        Self::listen_at(&mut self.probe, start, weights);
         self.start_push(i, pull, time);
     }
 
@@ -1308,6 +1357,7 @@ impl Sim {
         }
         self.bows[i].speed_to = speed;
         self.bows[i].pressure_to = pressure;
+        Self::listen_at(&mut self.probe, start, weights);
     }
 
     /// Lift the roaming bow.
@@ -1587,14 +1637,20 @@ impl Sim {
     /// Render the next block of interleaved stereo samples.
     pub fn process(&mut self, out: &mut [f32]) {
         let norm = 1.0 / (self.os as f64 * self.k);
+        self.probe_buf.clear();
         for frame in out.as_chunks_mut::<2>().0 {
+            let mut heard = 0.0;
             for _ in 0..self.os {
                 self.step();
+                heard += self.probe.dot_diff(&self.q, &self.q1);
                 for l in &mut self.listeners {
                     for t in &mut l.taps {
                         t.acc += t.w.dot_diff(&self.q, &self.q1);
                     }
                 }
+            }
+            if self.probe_buf.len() < PROBE {
+                self.probe_buf.push((heard * norm) as f32);
             }
             let (mut left, mut right) = (0.0, 0.0);
             for l in &mut self.listeners {

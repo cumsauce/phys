@@ -30,6 +30,7 @@ const INSTRUCTIONS: &str = r#"phys models sound from connected physical parts. U
 - Joints act along one direction (default: the normal of `a`'s part). spring: stiffness N/m, optional damping, cubic, and `gap` for free play (a rattle). contact: one-sided Hertz, stiffness N/m^1.5, `gap` the separation at rest. Leave `b` out to tie `a` to the ground. A spring near a string's end raises its pitch a little, as it would physically.
 - To excite by hand: `strike` acts on any point, live (the human hears it and it joins the take), with `kind` strike (a mallet: speed, mass, stiffness), pluck (pull, in metres) or bow (speed, pressure, duration). `listen` / `verify` take the same actions as `strikes` with times `t`, or replay the take, or play the scene's score of named exciters (kinds mallet, impulse, pluck, bow).
 - Bowing: speed about 0.1-0.5 m/s, pressure about 0.1-1 N, near one end of a string (at 0.08-0.15). Too little pressure for the speed gives a thin whistle on a high harmonic; too much gives a rough, pitchless scrape. `listen` shows which you have: a steady harmonic series on the string's pitch is a held note.
+- A joint pulls a part's pitch away from its own: a string tied to a body sounds 15-20 cents sharp. After tying things together, call `tune` so each part sounds at the pitch it was given (it sets a small `tune` factor on the part); call it again after changing joints.
 - A microphone hears every part through a rough radiation estimate; a pickup reads the surface velocity at one port exactly. A scene with no listener is silent.
 - The human may be editing the same scene in the browser page; scene_summary shows the current state. `screenshot` shows what their viewport shows."#;
 
@@ -120,6 +121,13 @@ struct VerifyArgs {
     strikes: Option<Vec<TimedStrike>>,
     #[serde(default)]
     tail: Option<f64>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct TuneArgs {
+    /// Part names. Left out: every string, bar and membrane.
+    #[serde(default)]
+    parts: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -219,6 +227,10 @@ fn describe_part(p: &Part, modes: Option<&(String, usize, usize)>) -> String {
         phys_core::material::MaterialSpec::Props(_) => "custom material".into(),
     };
     let count = modes.map_or(String::new(), |m| format!(", {} modes", m.1));
+    let count = match p.tune {
+        Some(t) => format!("{count}, tuned x{t}"),
+        None => count,
+    };
     format!("  {}: {shape}, {material}, at {:?}{count}", p.name, p.pos)
 }
 
@@ -623,6 +635,17 @@ impl Tools {
             Ok((text, _)) => fail(text),
             Err(e) => fail(e),
         }
+    }
+
+    /// Correct parts so they sound at the pitch they were given. A joint
+    /// pulls a part's pitch away from its own (a string tied to a body goes
+    /// 15-20 cents sharp); this plucks each part offline, reads its pitch
+    /// off the part itself and sets its `tune` factor to cancel the
+    /// difference. Reports cents off before and after. With no `parts`:
+    /// every string, bar and membrane. One undo step.
+    #[tool]
+    async fn tune(&self, Parameters(a): Parameters<TuneArgs>) -> Result<CallToolResult, ErrorData> {
+        reply(self.with(|app| app.tune(a.parts)))
     }
 
     /// Undo the last edit.

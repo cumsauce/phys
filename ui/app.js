@@ -9,7 +9,7 @@
 //   play.js       strike, pluck, bow; play points and keys
 //   inspector.js  the panel on the right
 
-import { S, $, hooks, listOf, freshName, partByName, select, pruneSelection } from './state.js';
+import { S, $, hooks, listOf, freshName, partByName, select, pruneSelection, noteOf } from './state.js';
 import { connect, send, ops, toast, settle } from './net.js';
 import {
   canvas, orbit, gizmo, gizmoState, world, overlay, buildWorld, applySelection, hover, hitAt, portFromHit, flash, tip, tick,
@@ -183,6 +183,22 @@ function showMidi() {
   $('midi').className = S.midi.length ? '' : 'dim';
 }
 
+let pitchAt = 0;
+/** The tuner: the pitch of the part last played. It holds for a moment, then dims. */
+function showPitch(hz) {
+  const t = $('tuner');
+  const now = performance.now();
+  const n = noteOf(hz);
+  if (n) {
+    pitchAt = now;
+    const cents = n.cents === 0 ? '±0' : `${n.cents > 0 ? '+' : '−'}${Math.abs(n.cents)}`;
+    t.textContent = `♪ ${n.name} ${cents}c · ${hz.toFixed(1)} Hz`;
+    t.className = Math.abs(n.cents) <= 3 ? 'good' : '';
+  } else if (now - pitchAt > 2500) {
+    t.className = 'dim';
+  }
+}
+
 const takeLabel = (n) => { $('clear').textContent = n ? `Clear take (${n})` : 'Clear take'; };
 
 connect({
@@ -209,6 +225,7 @@ connect({
     level.className = db > -1 ? 'hot' : '';
     $('load').textContent = `load ${(msg.load * 100).toFixed(0)}%${msg.blown ? ' — blew up, reset' : ''}`;
     $('load').className = msg.load > 0.8 || msg.blown ? 'bad' : '';
+    showPitch(msg.pitch);
   },
   take: (msg) => takeLabel(msg.count),
   played(msg) {

@@ -184,6 +184,12 @@ enum ClientMsg {
     },
     /// Stop all sound.
     Hush,
+    /// Correct parts so they sound at the pitch they were given. No list:
+    /// every string, bar and membrane.
+    Tune {
+        #[serde(default)]
+        parts: Option<Vec<String>>,
+    },
     /// Bind the next MIDI note played to this exciter (none: stop waiting).
     Learn {
         exciter: Option<String>,
@@ -583,6 +589,132 @@ impl App {
         ))
     }
 
+    /// Correct parts so they sound at the pitch they were given: pluck each
+    /// one offline, read its pitch off the part itself, and adjust its
+    /// `tune` factor until the two agree. Joints pull a part's pitch away
+    /// from its own (a string tied to a body goes sharp); this takes that
+    /// out. No list: every string, bar and membrane.
+    pub(crate) fn tune(&mut self, names: Option<Vec<String>>) -> Result<String, String> {
+        let scene = self.doc.scene().clone();
+        let chosen: Vec<usize> = match &names {
+            Some(list) => list
+                .iter()
+                .map(|n| {
+                    scene
+                        .parts
+                        .iter()
+                        .position(|p| &p.name == n)
+                        .ok_or_else(|| format!("tune: no part named `{n}`"))
+                })
+                .collect::<Result<_, _>>()?,
+            None => (0..scene.parts.len())
+                .filter(|i| {
+                    matches!(
+                        scene.parts[*i].shape,
+                        Shape::String { .. } | Shape::Bar { .. } | Shape::Membrane { .. }
+                    )
+                })
+                .collect(),
+        };
+        let chosen: Vec<usize> = chosen
+            .into_iter()
+            .filter(|i| !matches!(scene.parts[*i].shape, Shape::Mass { .. }))
+            .collect();
+        if chosen.is_empty() {
+            return Err(
+                "tune: nothing here has a pitch to tune (strings, bars and membranes do)".into(),
+            );
+        }
+        // What each part is meant to sound at: its own lowest mode, untuned.
+        let mut targets = Vec::new();
+        for &i in &chosen {
+            let mut plain = scene.parts[i].clone();
+            plain.tune = None;
+            let hz = phys_core::bake::bake(&plain, 16_000.0)?
+                .modes
+                .first()
+                .map_or(0.0, |m| m.hz);
+            targets.push(hz);
+        }
+        let sr = 48_000u32;
+        let mut tunes: Vec<f64> = chosen
+            .iter()
+            .map(|&i| scene.parts[i].tune.unwrap_or(1.0))
+            .collect();
+        let cents = |measured: f64, target: f64| 1200.0 * (measured / target).log2();
+        let (mut before, mut after) = (vec![f64::NAN; chosen.len()], vec![f64::NAN; chosen.len()]);
+        let mut block = vec![0.0f32; 2 * 4096];
+        for round in 0..4 {
+            let mut trial = scene.clone();
+            for (&i, t) in chosen.iter().zip(&tunes) {
+                trial.parts[i].tune = Some(*t);
+            }
+            let (mut sim, rig) = Sim::compile_with(&trial, f64::from(sr), &OPTS)?;
+            let mut worst = 0.0f64;
+            for (n, &i) in chosen.iter().enumerate() {
+                sim.reset();
+                let at: &[f64] = match trial.parts[i].shape {
+                    Shape::Plate { .. } => &[0.37, 0.41],
+                    Shape::Membrane { .. } => &[0.6, 0.55],
+                    _ => &[0.23],
+                };
+                sim.pluck(rig.start[i], &rig.weights(i, at, None), 0.002, 0.005);
+                let mut heard: Vec<f32> = Vec::with_capacity(1 << 16);
+                while heard.len() < 1 << 16 {
+                    sim.process(&mut block);
+                    heard.extend_from_slice(sim.probe());
+                }
+                let Some(measured) = phys_core::analysis::peak_near(&heard, sr, targets[n], 0.12)
+                else {
+                    continue;
+                };
+                let off = cents(measured, targets[n]);
+                if round == 0 {
+                    before[n] = off;
+                }
+                after[n] = off;
+                worst = worst.max(off.abs());
+                tunes[n] = (tunes[n] * targets[n] / measured).clamp(0.6, 1.6);
+            }
+            if worst < 0.5 {
+                // What was just measured is the scene as it will be applied.
+                for (n, &i) in chosen.iter().enumerate() {
+                    tunes[n] = trial.parts[i].tune.unwrap_or(1.0);
+                }
+                break;
+            }
+        }
+        let ops: Vec<Op> = chosen
+            .iter()
+            .zip(&tunes)
+            .map(|(&i, t)| {
+                let mut part = scene.parts[i].clone();
+                part.tune = ((t - 1.0).abs() > 1e-6).then_some((t * 1e6).round() / 1e6);
+                Op::Part(part)
+            })
+            .collect();
+        self.apply(ops)?;
+        let list: Vec<String> = chosen
+            .iter()
+            .enumerate()
+            .map(|(n, &i)| {
+                format!(
+                    "{} {:+.0} → {:+.1} cents",
+                    scene.parts[i].name, before[n], after[n]
+                )
+            })
+            .collect();
+        Ok(format!(
+            "tuned {}: {}",
+            if chosen.len() == 1 {
+                "1 part".into()
+            } else {
+                format!("{} parts", chosen.len())
+            },
+            list.join(", ")
+        ))
+    }
+
     /// Whether the scene differs from what was last saved or opened.
     pub(crate) fn dirty(&self) -> bool {
         *self.doc.scene() != self.saved
@@ -887,6 +1019,7 @@ impl App {
                 self.bow_stop();
                 Ok(None)
             }
+            ClientMsg::Tune { parts } => self.tune(parts).map(Some),
             ClientMsg::Learn { exciter } => {
                 self.learn = exciter;
                 let _ = self
@@ -926,6 +1059,8 @@ fn audio_thread(rx: mpsc::Receiver<AudioMsg>, events: broadcast::Sender<String>)
     let mut engine: Option<Engine> = None;
     let mut display: Vec<usize> = Vec::new();
     let mut levels: Vec<f32> = Vec::new();
+    let mut heard: Vec<f32> = Vec::new();
+    let (mut tick, mut pitch) = (0u32, None::<f64>);
     let mut failed = false;
     loop {
         match rx.recv_timeout(Duration::from_millis(33)) {
@@ -968,6 +1103,20 @@ fn audio_thread(rx: mpsc::Receiver<AudioMsg>, events: broadcast::Sender<String>)
             let st = e.control.status();
             levels.clear();
             e.control.levels(&display, &mut levels);
+            // The tuner: the pitch of the part last played, a few times a
+            // second, from the last tenth of a second or so of its motion.
+            e.control.heard(&mut heard);
+            let keep = (e.sample_rate as usize / 8).max(2048);
+            if heard.len() > keep {
+                heard.drain(..heard.len() - keep);
+            }
+            tick += 1;
+            if tick % 6 == 0 {
+                let loud = heard.iter().fold(0.0f32, |a, x| a.max(x.abs()));
+                pitch = (heard.len() >= keep && loud > 1e-7)
+                    .then(|| phys_core::analysis::pitch(&heard, e.sample_rate))
+                    .flatten();
+            }
             let _ = events.send(
                 json!({
                     "type": "tm",
@@ -976,6 +1125,7 @@ fn audio_thread(rx: mpsc::Receiver<AudioMsg>, events: broadcast::Sender<String>)
                     "peak": st.peak,
                     "blown": st.blown,
                     "amps": levels,
+                    "pitch": pitch,
                 })
                 .to_string(),
             );

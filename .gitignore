@@ -3,3 +3,4 @@
 *.wav
 .claude/settings.local.json
 phys-scene.json
+.DS_Store

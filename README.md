@@ -49,6 +49,12 @@ In the editor:
 - **Right-click** a part or a spot for a menu: add a play point, pickup or joint there, duplicate, rename, delete. Deleting a part takes its attachments with it.
 - **Views**: F frames the selection; 1, 3 and 7 look from the front, side and top.
 
+**Tuning**
+
+- Pitches can be typed as hertz or as note names (E2, F#3, Bb4), and are shown as both.
+- The footer has a tuner: the note, cents off and frequency of the part you last played, read from that part alone.
+- Anything tied to a part pulls its pitch off: a string tied to a body sounds 15 to 60 cents sharp. **Tune** (in a part's panel) or **Tune all** (in the scene panel) plucks each string, bar and membrane offline, measures it, and corrects it so it sounds at the pitch it was given. Run it again after changing joints.
+
 **Playing**
 
 - **Play** (H): excite a part by hand, in one of three ways chosen in the panel. In this tool the left button plays and the right button turns the view.
@@ -79,6 +85,7 @@ serves MCP tools on stdio and the same editor page alongside, sharing one scene 
 | `strike`, `excite` | Strike, pluck or bow a point by hand, or fire a named exciter, live |
 | `listen` | Render offline; returns peak, decay times, strongest partials and a spectrogram |
 | `verify` | Render offline and run PASS / FAIL checks (partial, decay, audible, stable) |
+| `tune` | Correct parts so they sound at the pitch they were given, with cents off before and after |
 | `undo`, `redo`, `save`, `open`, `new_scene` | Housekeeping |
 | `screenshot` | The editor page's viewport, when a page is open |
 
@@ -161,4 +168,5 @@ The state is double precision and nothing is hand-vectorised yet.
 - The vibration display is scaled to the loudest part, so a quiet part next to a loud one barely moves.
 - Thickness has no handle; it is typed or dragged on its label.
 - Key caps of play points that sit close together overlap.
-- A spring near the end of a string raises its pitch (a few percent in `string_on_plate`), as it would physically.
+- A spring near the end of a string raises its pitch (a few percent in `string_on_plate`), as it would physically. Tune corrects for it by scaling the part's mode frequencies; the examples are left uncorrected.
+- The live tuner reads one pitch: after a strum it follows whichever part was played last.
