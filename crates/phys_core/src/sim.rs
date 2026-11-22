@@ -305,6 +305,11 @@ pub struct Sim {
     small_y: Vec<f64>,
     /// Modes that belong to parts (mallet masses come after).
     part_modes: usize,
+    /// (name, first mode, mode count) of each part, for `adopt`.
+    part_ranges: Vec<(String, usize, usize)>,
+    /// Steps left in a `hush`, and the factor applied on each.
+    hush_left: usize,
+    hush_step: f64,
 }
 
 fn db(x: f64) -> f64 {
@@ -634,6 +639,11 @@ impl Sim {
             info_parts.push((scene.parts[i].name.clone(), kept, k.len()));
         }
         let part_modes = n;
+        let part_ranges: Vec<(String, usize, usize)> = info_parts
+            .iter()
+            .zip(&start)
+            .map(|((name, kept, _), first)| (name.clone(), *first, *kept))
+            .collect();
         let mallets = pending.iter().filter(|p| p.mallet.is_some()).count();
         n += mallets;
         let compress = |part: usize, w: &[f64], sign: f64| -> Seg {
@@ -961,6 +971,9 @@ impl Sim {
             small_y: vec![0.0; rank],
             hand,
             part_modes,
+            part_ranges,
+            hush_left: 0,
+            hush_step: 1.0,
             sample_rate,
             os,
             k,
@@ -1003,19 +1016,38 @@ impl Sim {
     /// modes (an edit that moved a listener or changed a joint, say). True
     /// when the state was taken over.
     pub fn adopt(&mut self, old: &Sim) -> bool {
-        // Only the parts' modes have to match: mallet masses come after
-        // them and may differ (the roaming mallet changes with each strike).
-        let n = self.part_modes;
-        if n != old.part_modes
-            || self.k != old.k
-            || self.c1[..n] != old.c1[..n]
-            || self.c2[..n] != old.c2[..n]
-            || self.mass[..n] != old.mass[..n]
-        {
+        if self.k != old.k {
             return false;
         }
-        self.q[..n].copy_from_slice(&old.q[..n]);
-        self.q1[..n].copy_from_slice(&old.q1[..n]);
+        // Part by part, by name: a part whose modes are unchanged keeps
+        // ringing; an edited or new one starts from rest. Mallet masses come
+        // after the parts and are not carried over.
+        let mut any = false;
+        for (name, start, len) in &self.part_ranges {
+            let Some((_, from, _)) = old
+                .part_ranges
+                .iter()
+                .find(|(n, _, l)| n == name && l == len)
+            else {
+                continue;
+            };
+            let (a, b) = (*start..*start + *len, *from..*from + *len);
+            if self.c1[a.clone()] != old.c1[b.clone()]
+                || self.c2[a.clone()] != old.c2[b.clone()]
+                || self.mass[a.clone()] != old.mass[b.clone()]
+            {
+                continue;
+            }
+            self.q[a.clone()].copy_from_slice(&old.q[b.clone()]);
+            self.q1[a].copy_from_slice(&old.q1[b]);
+            any = true;
+        }
+        self.settle();
+        any
+    }
+
+    /// Bring the joints' bookkeeping in line with the state as it now is.
+    fn settle(&mut self) {
         for e in &self.exciters {
             if let Exciter::Mallet { mode, .. } = e {
                 self.q[*mode] = PARKED;
@@ -1030,7 +1062,20 @@ impl Sim {
         }
         self.psi = (2.0 * v + self.gauge).sqrt();
         self.v_prev = v;
-        true
+    }
+
+    /// Stop everything: lift the bows, drop the plucks and fade all motion
+    /// away over about 30 ms.
+    pub fn hush(&mut self) {
+        for p in &mut self.pushes {
+            p.on = false;
+        }
+        for b in &mut self.bows {
+            (b.speed_to, b.pressure_to, b.pressure) = (0.0, 0.0, 0.0);
+        }
+        self.hush_left = ((0.03 / self.k) as usize).max(1);
+        // -80 dB by the end of the fade.
+        self.hush_step = (1e-4f64).powf(1.0 / self.hush_left as f64);
     }
 
     /// How many modes are simulated.
@@ -1248,14 +1293,18 @@ impl Sim {
         if !(speed.is_finite() && pressure.is_finite() && pressure >= 0.0) {
             return;
         }
-        let moved = seg.start != start || seg.w != weights;
+        let same_part = seg.start == start && seg.w.len() == weights.len();
+        let moved = !same_part || seg.w != weights;
         if moved {
             seg.start = start;
             seg.w.clear();
             seg.w.extend_from_slice(weights);
             self.place_bow(i);
-            // A bow lifted off one place lands on the next from rest.
-            self.bows[i].pressure = 0.0;
+            if !same_part {
+                // A bow lifted off one part lands on the next from rest;
+                // sliding along the same part keeps it pressed.
+                self.bows[i].pressure = 0.0;
+            }
         }
         self.bows[i].speed_to = speed;
         self.bows[i].pressure_to = pressure;
@@ -1509,6 +1558,15 @@ impl Sim {
 
         std::mem::swap(&mut self.q1, &mut self.q);
         std::mem::swap(&mut self.q, &mut self.qn);
+
+        if self.hush_left > 0 {
+            let n = self.part_modes;
+            let f = self.hush_step;
+            self.q[..n].iter_mut().for_each(|x| *x *= f);
+            self.q1[..n].iter_mut().for_each(|x| *x *= f);
+            self.hush_left -= 1;
+            self.settle();
+        }
 
         // A mallet that has bounced clear goes back to waiting.
         for e in &self.exciters {

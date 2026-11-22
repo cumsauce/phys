@@ -24,9 +24,15 @@ wry = { version = "0.57.2", optional = true }
 tao = { version = "0.37.2", optional = true }
 muda = { version = "0.17", optional = true }
 rfd = { version = "0.15", optional = true }
+midir = { version = "0.11", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation-sys = { version = "0.8", optional = true }
 
 [features]
-default = ["window"]
+default = ["window", "midi"]
+# MIDI input for play points.
+midi = ["dep:midir", "dep:core-foundation-sys"]
 # The desktop window (`phys app`). Without it the editor is browser-only.
 window = ["dep:wry", "dep:tao", "dep:muda", "dep:rfd"]
 

@@ -49,6 +49,8 @@ pub enum Command {
     },
     /// Lift the roaming bow.
     BowStop,
+    /// Stop all sound: a fast fade of all motion.
+    Hush,
     /// Replace the simulation (after an edit), with a short crossfade. It
     /// carries on from the old one's motion when their modes match.
     Swap(Box<Sim>),
@@ -202,6 +204,7 @@ impl Core {
                     let _ = self.trash.push(Trash::Weights(weights));
                 }
                 Command::BowStop => self.sim.bow_stop(),
+                Command::Hush => self.sim.hush(),
                 Command::Swap(mut new) => {
                     new.adopt(&self.sim);
                     let prev = std::mem::replace(&mut self.sim, new);

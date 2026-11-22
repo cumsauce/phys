@@ -19,7 +19,7 @@
       <button data-tool="pickup" title="Click a part to stick a contact pickup on it (P)">Pickup</button>
     </div>
     <div class="group">
-      <select id="add" title="Add something to the scene">
+      <select id="add" title="Add something: choose it, then click where it should go">
         <option value="">Add…</option>
         <option value="plate">Plate</option>
         <option value="bar">Bar</option>
@@ -53,7 +53,7 @@
   </header>
 
   <main>
-    <div id="view"></div>
+    <div id="view"><div id="labels"></div><div id="tip"></div><div id="menu"></div></div>
     <aside>
       <section id="strikebox">
         <h2>Play by hand</h2>
@@ -66,16 +66,23 @@
           <label>Speed <output id="speed_out"></output><input type="range" id="speed" min="0.2" max="8" step="0.1" value="2"></label>
           <label>Hardness <output id="hard_out"></output><input type="range" id="hard" min="5" max="10" step="0.1" value="8"></label>
           <label>Mass <output id="mass_out"></output><input type="range" id="mass" min="-3" max="-0.3" step="0.05" value="-1.7"></label>
+          <div class="note">Click to strike at this speed, or flick: press, sweep and release, and the sweep's speed sets how hard.</div>
         </div>
         <div data-for="pluck">
           <label>Pull <output id="pull_out"></output><input type="range" id="pull" min="0.5" max="12" step="0.1" value="3"></label>
-          <div class="note">Click a point to pluck it.</div>
+          <div class="note">Click a point to pluck it, or drag across strings to strum.</div>
         </div>
         <div data-for="bow">
           <label>Bow speed <output id="bowspeed_out"></output><input type="range" id="bowspeed" min="0.02" max="1" step="0.01" value="0.2"></label>
           <label>Pressure <output id="pressure_out"></output><input type="range" id="pressure" min="-1.7" max="0.5" step="0.02" value="-0.5"></label>
-          <div class="note">Hold the mouse down on a part to bow it; let go to lift the bow. Near one end of a string works best.</div>
+          <div class="note">Hold the mouse down on a part to bow it; slide to move the bow, scroll to press harder, let go to lift. Near one end of a string works best.</div>
         </div>
+        <h2>Keys</h2>
+        <div class="row">
+          <button id="assign" title="Give each selected part (or every string and bar) a play point and a key, left to right">Assign keys</button>
+          <button id="hush" title="Stop all sound (Space)">Hush</button>
+        </div>
+        <div class="note">A play point is a spot bound to a key or a MIDI note. Right-click a spot to add one. Shift plays harder, Alt softer. Right-drag turns the view while this tool is on.</div>
       </section>
       <section id="inspector"></section>
     </aside>
@@ -87,6 +94,7 @@
     <span id="stats"></span>
     <span class="meter" title="Output level"><i id="level"></i></span>
     <span id="load"></span>
+    <span id="midi" class="dim"></span>
     <span class="spacer"></span>
     <span id="toast"></span>
   </footer>

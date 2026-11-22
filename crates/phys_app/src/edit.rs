@@ -133,6 +133,15 @@ impl Strike {
     }
 }
 
+/// Something that was played, as the take remembers it.
+#[derive(Clone, Debug)]
+pub(crate) enum Played {
+    /// The roaming hand.
+    Hand(Strike),
+    /// One of the scene's exciters (a play point), fired at a strength.
+    Exciter(String, f64),
+}
+
 fn default_pull() -> f64 {
     0.003
 }
@@ -168,7 +177,16 @@ enum ClientMsg {
     Strike(Strike),
     Excite {
         exciter: String,
+        /// Left out: the exciter's own default.
         strength: Option<f64>,
+        /// Multiplies the strength: how hard a key was hit.
+        scale: Option<f64>,
+    },
+    /// Stop all sound.
+    Hush,
+    /// Bind the next MIDI note played to this exciter (none: stop waiting).
+    Learn {
+        exciter: Option<String>,
     },
     Volume {
         value: f32,
@@ -252,7 +270,11 @@ pub(crate) struct App {
     scene_msg: String,
     auto_gain: f32,
     volume: f32,
-    pub(crate) take: Vec<(f64, Strike)>,
+    pub(crate) take: Vec<(f64, Played)>,
+    /// The exciter waiting for a MIDI note to be bound to it.
+    pub(crate) learn: Option<String>,
+    /// Names of the connected MIDI inputs.
+    pub(crate) midi: Vec<String>,
     take_start: Option<Instant>,
     /// The bow stroke in `take` that has not been lifted yet.
     bow_open: Option<usize>,
@@ -337,6 +359,8 @@ impl App {
             "path": self.path.as_ref().map(|p| p.display().to_string()),
             "dirty": self.dirty(),
             "take": self.take.len(),
+            "midi": self.midi,
+            "learn": self.learn,
         })
         .to_string();
         if let Some(tx) = &self.audio {
@@ -414,13 +438,14 @@ impl App {
         if s.kind == HandKind::Bow {
             self.bow_open = Some(self.take.len());
         }
-        self.take.push((now, s));
+        self.take.push((now, Played::Hand(s)));
         Ok(())
     }
 
     /// The open bow stroke in the take, if any, ends at `now`.
     fn close_bow(&mut self, now: f64) {
-        if let Some((t, s)) = self.bow_open.take().and_then(|i| self.take.get_mut(i)) {
+        if let Some((t, Played::Hand(s))) = self.bow_open.take().and_then(|i| self.take.get_mut(i))
+        {
             s.duration = (now - *t).max(0.01);
         }
     }
@@ -438,7 +463,7 @@ impl App {
     /// The result keeps the simulation's own level.
     pub(crate) fn offline(
         &self,
-        strikes: &[(f64, Strike)],
+        played: &[(f64, Played)],
         score: bool,
         tail: f64,
     ) -> Result<Render, String> {
@@ -451,7 +476,17 @@ impl App {
         let sr = 48_000u32;
         let (mut sim, rig) = Sim::compile_with(scene, f64::from(sr), &OPTS)?;
         let mut events: Vec<(f64, Hit)> = Vec::new();
-        for (t, s) in strikes {
+        for (t, p) in played {
+            let s = match p {
+                Played::Hand(s) => s,
+                Played::Exciter(name, strength) => {
+                    // An exciter that has since been removed is skipped.
+                    if let Some(i) = sim.exciter(name) {
+                        events.push((*t, Hit::Exciter(i, *strength)));
+                    }
+                    continue;
+                }
+            };
             let part = scene
                 .parts
                 .iter()
@@ -723,19 +758,105 @@ impl App {
         Ok(did)
     }
 
-    pub(crate) fn excite(&mut self, exciter: &str, strength: f64) -> Result<(), String> {
-        let i = self
-            .doc
-            .scene()
+    /// Fire one of the scene's exciters: at `strength`, or at its own
+    /// default times `scale`. Zero lifts a bow. Returns the strength used.
+    pub(crate) fn excite(
+        &mut self,
+        exciter: &str,
+        strength: Option<f64>,
+        scale: f64,
+    ) -> Result<f64, String> {
+        let scene = self.doc.scene();
+        let i = scene
             .exciters
             .iter()
             .position(|e| e.name == exciter)
             .ok_or_else(|| format!("no exciter named `{exciter}`"))?;
+        let strength = strength.unwrap_or_else(|| scene.exciters[i].default_strength() * scale);
+        if !strength.is_finite() {
+            return Err("strength: give a number".into());
+        }
         self.send(Command::Excite {
             exciter: i,
             strength,
         });
-        Ok(())
+        let now = self
+            .take_start
+            .get_or_insert_with(Instant::now)
+            .elapsed()
+            .as_secs_f64();
+        self.take
+            .push((now, Played::Exciter(exciter.to_string(), strength)));
+        let _ = self.events.send(
+            json!({"type": "played", "exciter": exciter, "on": strength != 0.0, "take": self.take.len()}).to_string(),
+        );
+        Ok(strength)
+    }
+
+    /// A MIDI note went down. Binds it when an exciter is waiting to learn
+    /// one, otherwise plays every exciter bound to it.
+    #[cfg_attr(not(feature = "midi"), allow(dead_code))]
+    pub(crate) fn note_on(&mut self, note: u8, velocity: u8) {
+        let _ = self
+            .events
+            .send(json!({"type": "midi_note", "note": note, "velocity": velocity}).to_string());
+        if let Some(name) = self.learn.take() {
+            if let Some(mut e) = self
+                .doc
+                .scene()
+                .exciters
+                .iter()
+                .find(|e| e.name == name)
+                .cloned()
+            {
+                e.note = Some(note);
+                if let Err(err) = self.apply(vec![Op::Exciter(e)]) {
+                    let _ = self
+                        .events
+                        .send(json!({"type": "error", "message": err}).to_string());
+                }
+            }
+            return;
+        }
+        // Velocity 64 plays the exciter's own strength; the hardest hit
+        // about 1.7 times it.
+        let scale = 0.25 + 0.75 * f64::from(velocity) / 64.0;
+        let names: Vec<String> = self
+            .doc
+            .scene()
+            .exciters
+            .iter()
+            .filter(|e| e.note == Some(note))
+            .map(|e| e.name.clone())
+            .collect();
+        for name in names {
+            let _ = self.excite(&name, None, scale);
+        }
+    }
+
+    /// A MIDI note came up: bows bound to it lift.
+    #[cfg_attr(not(feature = "midi"), allow(dead_code))]
+    pub(crate) fn note_off(&mut self, note: u8) {
+        let names: Vec<String> = self
+            .doc
+            .scene()
+            .exciters
+            .iter()
+            .filter(|e| e.note == Some(note) && e.kind == phys_core::scene::ExciterKind::Bow)
+            .map(|e| e.name.clone())
+            .collect();
+        for name in names {
+            let _ = self.excite(&name, Some(0.0), 1.0);
+        }
+    }
+
+    /// The connected MIDI inputs changed.
+    #[cfg_attr(not(feature = "midi"), allow(dead_code))]
+    pub(crate) fn set_midi(&mut self, devices: Vec<String>) {
+        self.midi = devices;
+        let _ = self
+            .events
+            .send(json!({"type": "midi", "devices": self.midi}).to_string());
     }
 
     /// Strike live and tell the pages how long the take now is.
@@ -754,8 +875,24 @@ impl App {
             ClientMsg::Undo => self.undo().map(|_| None),
             ClientMsg::Redo => self.redo().map(|_| None),
             ClientMsg::Strike(s) => self.strike_live(s).map(|_| None),
-            ClientMsg::Excite { exciter, strength } => {
-                self.excite(&exciter, strength.unwrap_or(1.0)).map(|_| None)
+            ClientMsg::Excite {
+                exciter,
+                strength,
+                scale,
+            } => self
+                .excite(&exciter, strength, scale.unwrap_or(1.0).clamp(0.0, 10.0))
+                .map(|_| None),
+            ClientMsg::Hush => {
+                self.send(Command::Hush);
+                self.bow_stop();
+                Ok(None)
+            }
+            ClientMsg::Learn { exciter } => {
+                self.learn = exciter;
+                let _ = self
+                    .events
+                    .send(json!({"type": "learn", "exciter": self.learn}).to_string());
+                Ok(None)
             }
             ClientMsg::Volume { value } => {
                 self.volume = value.clamp(0.0, 8.0);
@@ -901,14 +1038,49 @@ const FILES: &[(&str, &str, &str)] = &[
         include_str!("../../../ui/index.html"),
     ),
     (
+        "style.css",
+        "text/css",
+        include_str!("../../../ui/style.css"),
+    ),
+    (
         "app.js",
         "text/javascript",
         include_str!("../../../ui/app.js"),
     ),
     (
-        "style.css",
-        "text/css",
-        include_str!("../../../ui/style.css"),
+        "state.js",
+        "text/javascript",
+        include_str!("../../../ui/state.js"),
+    ),
+    (
+        "net.js",
+        "text/javascript",
+        include_str!("../../../ui/net.js"),
+    ),
+    (
+        "viewport.js",
+        "text/javascript",
+        include_str!("../../../ui/viewport.js"),
+    ),
+    (
+        "handles.js",
+        "text/javascript",
+        include_str!("../../../ui/handles.js"),
+    ),
+    (
+        "build.js",
+        "text/javascript",
+        include_str!("../../../ui/build.js"),
+    ),
+    (
+        "play.js",
+        "text/javascript",
+        include_str!("../../../ui/play.js"),
+    ),
+    (
+        "inspector.js",
+        "text/javascript",
+        include_str!("../../../ui/inspector.js"),
     ),
     (
         "vendor/three.module.min.js",
@@ -997,12 +1169,17 @@ pub(crate) fn build(path: Option<PathBuf>, audio: bool) -> Result<Shared, String
         auto_gain: 1.0,
         volume: 1.0,
         take: Vec::new(),
+        learn: None,
+        midi: Vec::new(),
         take_start: None,
         bow_open: None,
     };
     app.saved = app.doc.scene().clone();
     app.rebuild()?;
-    Ok(Arc::new(Mutex::new(app)))
+    let shared = Arc::new(Mutex::new(app));
+    #[cfg(feature = "midi")]
+    crate::midi::start(shared.clone());
+    Ok(shared)
 }
 
 /// Serve the editor page until the process ends.

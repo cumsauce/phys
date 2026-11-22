@@ -265,6 +265,28 @@ pub struct Exciter {
     /// Default 0.3.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pressure: Option<f64>,
+    /// The strength it fires with when none is given (see `Event::strength`
+    /// for the unit). Default: mallet 2, impulse 0.01, pluck 0.003, bow 0.2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strength: Option<f64>,
+    /// A computer key that plays it in the editor, e.g. "a".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// A MIDI note number (0..127) that plays it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<u8>,
+}
+
+impl Exciter {
+    /// The strength it fires with when none is given.
+    pub fn default_strength(&self) -> f64 {
+        self.strength.unwrap_or(match self.kind {
+            ExciterKind::Mallet => 2.0,
+            ExciterKind::Impulse => 0.01,
+            ExciterKind::Pluck => 0.003,
+            ExciterKind::Bow => 0.2,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -475,6 +497,16 @@ impl Scene {
             range(&format!("exciter `{n}`: damping"), e.damping, 0.0, 100.0)?;
             range(&format!("exciter `{n}`: time"), e.time, 0.001, 2.0)?;
             range(&format!("exciter `{n}`: pressure"), e.pressure, 0.0, 100.0)?;
+            range(&format!("exciter `{n}`: strength"), e.strength, -1e6, 1e6)?;
+            range(
+                &format!("exciter `{n}`: note"),
+                e.note.map(f64::from),
+                0.0,
+                127.0,
+            )?;
+            if e.key.as_ref().is_some_and(|k| k.chars().count() != 1) {
+                return Err(format!("exciter `{n}`: key: give one character"));
+            }
             if let Some(d) = e.dir {
                 crate::math::unit(d)
                     .ok_or_else(|| format!("exciter `{n}`: dir {d:?}: give a direction"))?;

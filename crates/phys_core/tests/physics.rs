@@ -332,3 +332,62 @@ fn a_bow_cannot_blow_the_string_up_however_hard_it_is_pressed() {
     // within a small multiple of the bow's own speed.
     assert!(r.peak.is_finite() && r.peak < 100.0, "peak {}", r.peak);
 }
+
+const PAIR: &str = r#"{
+  "parts": [
+    {"name": "a", "shape": {"kind": "bar", "length": 0.3, "width": 0.04, "thickness": 0.012}},
+    {"name": "b", "shape": {"kind": "bar", "length": LENGTH, "width": 0.04, "thickness": 0.012}, "pos": [0, 0.1, 0]}
+  ],
+  "exciters": [{"name": "ha", "kind": "impulse", "on": {"part": "a", "at": [0.2]}},
+               {"name": "hb", "kind": "impulse", "on": {"part": "b", "at": [0.2]}}],
+  "listeners": [{"name": "pa", "kind": "pickup", "on": {"part": "a", "at": [0.8]}, "pan": -1},
+                {"name": "pb", "kind": "pickup", "on": {"part": "b", "at": [0.8]}, "pan": 1}]
+}"#;
+
+#[test]
+fn editing_one_part_leaves_the_other_ringing() {
+    let mut old =
+        Sim::compile(&scene(&PAIR.replace("LENGTH", "0.25")), f64::from(SR)).expect("compiles");
+    old.excite(0, 0.01);
+    old.excite(1, 0.01);
+    let mut buf = vec![0.0f32; 2 * 480];
+    old.process(&mut buf);
+    // Bar b gets longer; bar a is untouched.
+    let mut new =
+        Sim::compile(&scene(&PAIR.replace("LENGTH", "0.27")), f64::from(SR)).expect("compiles");
+    assert!(new.adopt(&old));
+    new.process(&mut buf);
+    let (left, right): (Vec<f32>, Vec<f32>) =
+        buf.as_chunks::<2>().0.iter().map(|f| (f[0], f[1])).unzip();
+    assert!(
+        left.iter().any(|x| *x != 0.0),
+        "the untouched bar went silent"
+    );
+    assert!(
+        right.iter().all(|x| *x == 0.0),
+        "the edited bar kept its old motion"
+    );
+}
+
+#[test]
+fn a_hush_silences_everything_within_fifty_milliseconds() {
+    let mut sim =
+        Sim::compile(&scene(&PAIR.replace("LENGTH", "0.25")), f64::from(SR)).expect("compiles");
+    sim.excite(0, 0.01);
+    sim.excite(1, 0.01);
+    let mut buf = vec![0.0f32; 2 * 2400];
+    sim.process(&mut buf);
+    let before = buf.iter().fold(0.0f32, |a, x| a.max(x.abs()));
+    sim.hush();
+    sim.process(&mut buf);
+    sim.process(&mut buf);
+    let after = buf.iter().fold(0.0f32, |a, x| a.max(x.abs()));
+    assert!(
+        before > 0.0 && after < before * 1e-3,
+        "before {before}, after {after}"
+    );
+    // And it can be played again afterwards.
+    sim.excite(0, 0.01);
+    sim.process(&mut buf);
+    assert!(buf.iter().any(|x| x.abs() > before * 0.1));
+}

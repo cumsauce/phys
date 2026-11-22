@@ -442,21 +442,40 @@ pub struct Preview {
     pub tris: Vec<u32>,
 }
 
-fn grid(nu: usize, nv: usize, mut point: impl FnMut(f64, f64) -> (V3, Vec<f64>)) -> Preview {
+/// A grid of (nu + 1) x (nv + 1) points as a slab `thickness` deep: a top
+/// and a bottom face, joined by a wall along `rim` (grid indices i, j).
+fn slab(
+    nu: usize,
+    nv: usize,
+    thickness: f64,
+    rim: &[(usize, usize)],
+    mut point: impl FnMut(f64, f64) -> (V3, Vec<f64>),
+) -> Preview {
     let (mut verts, mut at, mut tris) = (Vec::new(), Vec::new(), Vec::new());
-    for i in 0..=nu {
-        for j in 0..=nv {
-            let (p, a) = point(i as f64 / nu as f64, j as f64 / nv as f64);
-            verts.push(p);
-            at.push(a);
+    for face in [0.5, -0.5] {
+        for i in 0..=nu {
+            for j in 0..=nv {
+                let (mut p, a) = point(i as f64 / nu as f64, j as f64 / nv as f64);
+                p[1] += face * thickness;
+                verts.push(p);
+                at.push(a);
+            }
         }
     }
     let row = (nv + 1) as u32;
+    let below = ((nu + 1) * (nv + 1)) as u32;
     for i in 0..nu as u32 {
         for j in 0..nv as u32 {
             let a = i * row + j;
             tris.extend([a, a + 1, a + row, a + 1, a + row + 1, a + row]);
+            let b = a + below;
+            tris.extend([b, b + row, b + 1, b + 1, b + row, b + row + 1]);
         }
+    }
+    for pair in rim.windows(2) {
+        let a = pair[0].0 as u32 * row + pair[0].1 as u32;
+        let b = pair[1].0 as u32 * row + pair[1].1 as u32;
+        tris.extend([a, a + below, b, b, a + below, b + below]);
     }
     Preview {
         kind: "surface",
@@ -466,29 +485,69 @@ fn grid(nu: usize, nv: usize, mut point: impl FnMut(f64, f64) -> (V3, Vec<f64>))
     }
 }
 
+/// The edge of a rectangular grid, all the way round.
+fn perimeter(nu: usize, nv: usize) -> Vec<(usize, usize)> {
+    let mut rim: Vec<(usize, usize)> = (0..=nv).map(|j| (0, j)).collect();
+    rim.extend((1..=nu).map(|i| (i, nv)));
+    rim.extend((0..nv).rev().map(|j| (nu, j)));
+    rim.extend((0..nu).rev().map(|i| (i, 0)));
+    rim
+}
+
+/// The least radius a string is drawn with, so it can be seen and clicked.
+const STRING_DRAWN: f64 = 0.0012;
+
 pub fn preview(shape: &Shape) -> Preview {
     match shape {
-        Shape::String { .. } => {
-            let n = 96;
-            let at: Vec<Vec<f64>> = (0..=n).map(|i| vec![i as f64 / n as f64]).collect();
+        Shape::String { radius, .. } => {
+            // A tube: a ring of points around each point of the centre line.
+            let (n, sides) = (96usize, 6usize);
+            let r = radius.max(STRING_DRAWN);
+            let (mut verts, mut at, mut tris) = (Vec::new(), Vec::new(), Vec::new());
+            for i in 0..=n {
+                let u = i as f64 / n as f64;
+                let c = local_point(shape, &[u]);
+                for k in 0..sides {
+                    let th = 2.0 * PI * k as f64 / sides as f64;
+                    verts.push([c[0], c[1] + r * th.cos(), c[2] + r * th.sin()]);
+                    at.push(vec![u]);
+                }
+            }
+            for i in 0..n as u32 {
+                for k in 0..sides as u32 {
+                    let (a, b) = (
+                        i * sides as u32 + k,
+                        i * sides as u32 + (k + 1) % sides as u32,
+                    );
+                    let s = sides as u32;
+                    tris.extend([a, b, a + s, b, b + s, a + s]);
+                }
+            }
             Preview {
-                kind: "line",
-                verts: at.iter().map(|a| local_point(shape, a)).collect(),
+                kind: "surface",
+                verts,
                 at,
-                tris: Vec::new(),
+                tris,
             }
         }
-        Shape::Bar { width, .. } => grid(48, 1, |u, v| {
+        Shape::Bar {
+            width, thickness, ..
+        } => slab(48, 1, *thickness, &perimeter(48, 1), |u, v| {
             let mut p = local_point(shape, &[u]);
             p[2] = (v - 0.5) * width;
             (p, vec![u])
         }),
-        Shape::Plate { .. } => grid(24, 24, |u, v| (local_point(shape, &[u, v]), vec![u, v])),
-        Shape::Membrane { .. } => grid(12, 48, |r, t| {
-            let th = 2.0 * PI * t;
-            let at = vec![0.5 * (1.0 + r * th.cos()), 0.5 * (1.0 + r * th.sin())];
-            (local_point(shape, &at), at)
+        Shape::Plate { thickness, .. } => slab(24, 24, *thickness, &perimeter(24, 24), |u, v| {
+            (local_point(shape, &[u, v]), vec![u, v])
         }),
+        Shape::Membrane { thickness, .. } => {
+            let rim: Vec<(usize, usize)> = (0..=48).map(|j| (12, j)).collect();
+            slab(12, 48, thickness.max(0.001), &rim, |r, t| {
+                let th = 2.0 * PI * t;
+                let at = vec![0.5 * (1.0 + r * th.cos()), 0.5 * (1.0 + r * th.sin())];
+                (local_point(shape, &at), at)
+            })
+        }
         Shape::Mass { .. } => Preview {
             kind: "point",
             verts: vec![[0.0; 3]],

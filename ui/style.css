@@ -122,3 +122,63 @@ aside li small { color: var(--dim); }
 
 #hand { margin-bottom: 10px; }
 #hand button { flex: 1; }
+
+/* Overlays on the 3D view. */
+#labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.cap {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  min-width: 18px;
+  padding: 1px 5px;
+  text-align: center;
+  font-weight: 600;
+  font-size: 11px;
+  color: #1a1408;
+  background: #d8dce3;
+  border-radius: 4px;
+  box-shadow: 0 1px 0 #6b7280;
+}
+.cap.lit { background: var(--accent); }
+
+#tip {
+  position: absolute;
+  display: none;
+  pointer-events: none;
+  padding: 2px 7px;
+  background: #0d0e10;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  white-space: nowrap;
+  z-index: 5;
+}
+
+#menu {
+  position: absolute;
+  display: none;
+  width: 184px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  z-index: 6;
+}
+#menu .title { padding: 4px 8px; color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+#menu button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 5px 8px; }
+#menu button:hover { background: #2a2e35; }
+
+#view.placing canvas { cursor: copy; }
+aside .scrub { cursor: ew-resize; user-select: none; touch-action: none; }
+aside .pair { display: flex; gap: 4px; align-items: center; }
+aside .pair button { padding: 3px 6px; }
+.keycap {
+  min-width: 34px;
+  padding: 2px 6px;
+  text-align: center;
+  color: var(--text);
+  background: #0d0e10;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.dim { color: var(--dim); }
+#midi.lit { color: var(--accent); }

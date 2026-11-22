@@ -20,11 +20,11 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::edit::{self, App, HandKind, Shared, Strike};
+use crate::edit::{self, App, HandKind, Played, Shared, Strike};
 
 const INSTRUCTIONS: &str = r#"phys models sound from connected physical parts. Units are SI (metres, kilograms, seconds, newtons, hertz); Y is up.
 - You cannot hear. `listen` renders offline and returns measurements (strongest partials, decay times, peak) and a spectrogram; `verify` runs PASS / FAIL checks. Say what you measured, never that something "sounds" a certain way: the human's ears decide.
-- Call scene_summary first. Build with apply_ops: one atomic batch of items tagged by "type" (part, joint, exciter, listener, settings, score, name, delete). Items are upserts by name: re-issue the whole item to change it; a field left out returns to its default. Any failing item rolls the whole batch back. describe_op gives an example and the schema of each.
+- Call scene_summary first. Build with apply_ops: one atomic batch of items tagged by "type" (part, joint, exciter, listener, settings, score, name, delete, rename). Items are upserts by name: re-issue the whole item to change it; a field left out returns to its default. Any failing item rolls the whole batch back. describe_op gives an example and the schema of each.
 - Parts: string (f0 or tension), bar (free or supported ends), plate (simply supported), membrane (f0 or tension), mass. A part's local axes: strings and bars run along X, plates and membranes lie in XZ, and all vibrate along Y. `pos` and `rot` (degrees, about X then Y then Z) place it.
 - A port is a point on a part in its own normalised coordinates: {"part": "top", "at": [0.7, 0.45]}. `at` is [u] for a string or bar, [u, v] for a plate or membrane, [] for a mass; each 0..1. A port on a node line of a mode cannot excite or hear that mode (the middle of a string misses every even harmonic).
 - Joints act along one direction (default: the normal of `a`'s part). spring: stiffness N/m, optional damping, cubic, and `gap` for free play (a rattle). contact: one-sided Hertz, stiffness N/m^1.5, `gap` the separation at rest. Leave `b` out to tie `a` to the ground. A spring near a string's end raises its pitch a little, as it would physically.
@@ -312,7 +312,10 @@ fn take_of(
     let tail = tail.unwrap_or(3.0);
     match strikes {
         Some(list) if !list.is_empty() => {
-            let timed: Vec<(f64, Strike)> = list.into_iter().map(|s| (s.t, s.strike)).collect();
+            let timed: Vec<(f64, Played)> = list
+                .into_iter()
+                .map(|s| (s.t, Played::Hand(s.strike)))
+                .collect();
             let r = app.offline(&timed, false, tail)?;
             Ok((r, format!("{} given strikes", timed.len())))
         }
@@ -421,6 +424,8 @@ impl Tools {
             "score": {"type": "score", "events": [{"t": 0.05, "exciter": "pick", "strength": 1.5}, {"t": 1.0, "exciter": "bow", "strength": 0.2}, {"t": 2.5, "exciter": "bow", "strength": 0}]},
             "name": {"type": "name", "name": "guitar"},
             "delete": {"type": "delete", "kind": "joint", "name": "bridge"},
+            "rename": {"type": "rename", "kind": "part", "from": "top", "to": "soundboard"},
+            "exciter (play point)": {"type": "exciter", "name": "play_e", "kind": "pluck", "on": {"part": "string", "at": [0.2]}, "strength": 0.003, "key": "a", "note": 64},
         });
         let shapes = json!([
             {"kind": "string", "length": 0.65, "radius": 0.0004, "f0": 196},
@@ -443,10 +448,12 @@ impl Tools {
             "exciter" => serde_json::to_value(schemars::schema_for!(Exciter)),
             "listener" => serde_json::to_value(schemars::schema_for!(Listener)),
             "settings" => serde_json::to_value(schemars::schema_for!(Settings)),
-            "score" | "name" | "delete" => serde_json::to_value(schemars::schema_for!(Op)),
+            "score" | "name" | "delete" | "rename" => {
+                serde_json::to_value(schemars::schema_for!(Op))
+            }
             other => {
                 return fail(format!(
-                    "kind `{other}`: use part, joint, exciter, listener, settings, score, name or delete"
+                    "kind `{other}`: use part, joint, exciter, listener, settings, score, name, delete or rename"
                 ));
             }
         };
@@ -490,28 +497,15 @@ impl Tools {
         reply(started)
     }
 
-    /// Fire one of the scene's named exciters, live.
+    /// Fire one of the scene's named exciters (a play point), live. With no
+    /// strength it uses the exciter's own; 0 lifts a bow.
     #[tool]
     async fn excite(
         &self,
         Parameters(a): Parameters<ExciteArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         reply(self.with(|app| {
-            let kind = app
-                .doc
-                .scene()
-                .exciters
-                .iter()
-                .find(|e| e.name == a.exciter)
-                .map(|e| e.kind);
-            use phys_core::scene::ExciterKind as K;
-            let strength = a.strength.unwrap_or(match kind {
-                Some(K::Impulse) => 0.01,
-                Some(K::Pluck) => 0.003,
-                Some(K::Bow) => 0.2,
-                _ => 2.0,
-            });
-            app.excite(&a.exciter, strength)?;
+            let strength = app.excite(&a.exciter, a.strength, 1.0)?;
             Ok(format!("fired {} at {strength}", a.exciter))
         }))
     }

@@ -14,6 +14,8 @@ use std::time::Instant;
 
 mod edit;
 mod mcp;
+#[cfg(feature = "midi")]
+mod midi;
 #[cfg(feature = "window")]
 mod window;
 
@@ -56,7 +58,7 @@ fn parse() -> Result<Args, String> {
     let mut it = std::env::args().skip(1).peekable();
     // No command (a double-clicked app, or just a scene file or a flag)
     // opens the window.
-    const COMMANDS: [&str; 6] = ["render", "play", "app", "edit", "mcp", "info"];
+    const COMMANDS: [&str; 7] = ["render", "play", "app", "edit", "mcp", "info", "midi-send"];
     let command = match it.peek() {
         Some(first) if COMMANDS.contains(&first.as_str()) => it.next().unwrap_or_default(),
         Some(first) if first.starts_with("--") || first.ends_with(".json") => "app".to_string(),
@@ -270,6 +272,21 @@ fn play(args: &Args, scene: &Scene) -> Result<(), String> {
 
 fn run() -> Result<(), String> {
     let args = parse()?;
+    #[cfg(feature = "midi")]
+    if args.command == "midi-send" {
+        // A test aid: `phys midi-send <note> [velocity]` plays one note on a
+        // virtual MIDI port, for checking MIDI input without a keyboard.
+        let name = args.scene.to_string_lossy().into_owned();
+        let note = name
+            .parse()
+            .map_err(|_| "midi-send: give a note number 0..127")?;
+        let velocity = args
+            .out
+            .as_ref()
+            .and_then(|v| v.to_string_lossy().parse().ok())
+            .unwrap_or(100);
+        return midi::send_test(note, velocity);
+    }
     if args.command == "app" {
         #[cfg(feature = "window")]
         {
