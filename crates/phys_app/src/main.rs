@@ -53,9 +53,16 @@ struct Args {
 }
 
 fn parse() -> Result<Args, String> {
-    let mut it = std::env::args().skip(1);
-    // No command at all (a double-clicked app) opens the window.
-    let command = it.next().unwrap_or_else(|| "app".to_string());
+    let mut it = std::env::args().skip(1).peekable();
+    // No command (a double-clicked app, or just a scene file or a flag)
+    // opens the window.
+    const COMMANDS: [&str; 6] = ["render", "play", "app", "edit", "mcp", "info"];
+    let command = match it.peek() {
+        Some(first) if COMMANDS.contains(&first.as_str()) => it.next().unwrap_or_default(),
+        Some(first) if first.starts_with("--") || first.ends_with(".json") => "app".to_string(),
+        Some(first) => return Err(format!("unknown command {first}\n{USAGE}")),
+        None => "app".to_string(),
+    };
     let mut args = Args {
         command,
         scene: PathBuf::new(),

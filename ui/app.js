@@ -660,6 +660,13 @@ function add(what) {
 
 // ---------------------------------------------------------------- connection
 
+function showFile() {
+  const file = doc.path ? doc.path.split('/').pop() : 'not saved';
+  $('file').textContent = `${doc.scene.name || 'untitled'}${doc.dirty ? ' *' : ''} — ${file}`;
+  $('file').title = doc.path || 'This scene has not been saved to a file yet';
+  document.title = `phys — ${$('file').textContent}`;
+}
+
 function toast(message, error = false) {
   const t = $('toast');
   t.textContent = message;
@@ -692,6 +699,7 @@ function connect() {
       buildWorld();
       renderInspector();
       $('stats').textContent = `${msg.info.modes} modes`;
+      showFile();
       $('clear').textContent = msg.take ? `Clear take (${msg.take})` : 'Clear take';
     } else if (msg.type === 'tm') {
       amps = msg.amps;
@@ -701,6 +709,18 @@ function connect() {
       level.className = db > -1 ? 'hot' : '';
       $('load').textContent = `load ${(msg.load * 100).toFixed(0)}%${msg.blown ? ' — blew up, reset' : ''}`;
       $('load').className = msg.load > 0.8 || msg.blown ? 'bad' : '';
+    } else if (msg.type === 'file') {
+      doc.path = msg.path;
+      doc.dirty = msg.dirty;
+      showFile();
+      if (!sel) renderInspector();
+    } else if (msg.type === 'ask') {
+      // In a browser there is no file dialog: ask here, then send the
+      // action again with what was missing.
+      if (msg.dirty && !confirm('The scene has changes that are not saved. Discard them?')) return;
+      if (msg.what === 'new') return send({ type: 'new', force: true });
+      const path = prompt(msg.what === 'open' ? 'Scene file to open:' : 'Save the scene as:', msg.path || 'phys-scene.json');
+      if (path) send({ type: msg.what, path, force: true });
     } else if (msg.type === 'shot') {
       // An agent asked to see the viewport.
       renderer.render(scene3, camera);
@@ -724,6 +744,9 @@ $('add').addEventListener('change', (e) => { if (e.target.value) add(e.target.va
 $('undo').addEventListener('click', () => send({ type: 'undo' }));
 $('redo').addEventListener('click', () => send({ type: 'redo' }));
 $('save').addEventListener('click', () => send({ type: 'save' }));
+$('saveas').addEventListener('click', () => send({ type: 'save_as' }));
+$('open').addEventListener('click', () => send({ type: 'open' }));
+$('new').addEventListener('click', () => send({ type: 'new' }));
 $('render').addEventListener('click', () => { toast('rendering…'); send({ type: 'render' }); });
 $('clear').addEventListener('click', () => send({ type: 'clear_take' }));
 $('volume').addEventListener('input', (e) => send({ type: 'volume', value: Number(e.target.value) }));

@@ -688,8 +688,7 @@ impl Tools {
     #[tool]
     async fn open(&self, Parameters(a): Parameters<OpenArgs>) -> Result<CallToolResult, ErrorData> {
         reply(self.with(|app| {
-            let text = std::fs::read_to_string(&a.path).map_err(|e| format!("{}: {e}", a.path))?;
-            app.replace(Scene::from_json(&text)?, Some(PathBuf::from(&a.path)))?;
+            app.open_path(std::path::Path::new(&a.path))?;
             Ok(summary(app, self.url.as_deref()))
         }))
     }

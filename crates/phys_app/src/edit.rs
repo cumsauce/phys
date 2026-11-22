@@ -174,6 +174,25 @@ enum ClientMsg {
         value: f32,
     },
     Save,
+    /// Save under a new path. With no path, the app shows a file dialog
+    /// and a browser page is asked for one.
+    SaveAs {
+        #[serde(default)]
+        path: Option<String>,
+    },
+    /// Open a scene file; the path is chosen as for `SaveAs`. `force`
+    /// skips the unsaved-changes question.
+    Open {
+        #[serde(default)]
+        path: Option<String>,
+        #[serde(default)]
+        force: bool,
+    },
+    /// Start again from the default scene.
+    New {
+        #[serde(default)]
+        force: bool,
+    },
     Render,
     ClearTake,
     /// Lift the roaming bow.
@@ -184,7 +203,41 @@ enum ClientMsg {
     },
 }
 
+/// A file action that needs a dialog.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FileAction {
+    New,
+    Open,
+    Save,
+    SaveAs,
+}
+
+impl FileAction {
+    fn word(self) -> &'static str {
+        match self {
+            FileAction::New => "new",
+            FileAction::Open => "open",
+            FileAction::Save | FileAction::SaveAs => "save_as",
+        }
+    }
+}
+
+/// What the server asks of the desktop window, which owns the main thread
+/// and so is the only place a dialog can be shown.
+#[cfg_attr(not(feature = "window"), allow(dead_code))]
+pub(crate) enum UiEvent {
+    File(FileAction),
+    Title(String),
+}
+
 pub(crate) struct App {
+    /// The desktop window's ear, when there is one.
+    pub(crate) ui: Option<Box<dyn Fn(UiEvent) + Send>>,
+    /// The scene as last saved or opened, to tell whether there are
+    /// unsaved changes.
+    saved: Scene,
+    /// A reply for the page that sent the message being handled.
+    reply: Option<serde_json::Value>,
     pub(crate) doc: Doc,
     pub(crate) path: Option<PathBuf>,
     pub(crate) rate: u32,
@@ -282,6 +335,7 @@ impl App {
             "undo": self.doc.can_undo(),
             "redo": self.doc.can_redo(),
             "path": self.path.as_ref().map(|p| p.display().to_string()),
+            "dirty": self.dirty(),
             "take": self.take.len(),
         })
         .to_string();
@@ -293,6 +347,9 @@ impl App {
             });
         }
         self.rig = Some(rig);
+        if let Some(ui) = &self.ui {
+            ui(UiEvent::Title(self.title()));
+        }
         self.scene_msg = msg.clone();
         let _ = self.events.send(msg);
         Ok(())
@@ -491,14 +548,39 @@ impl App {
         ))
     }
 
+    /// Whether the scene differs from what was last saved or opened.
+    pub(crate) fn dirty(&self) -> bool {
+        *self.doc.scene() != self.saved
+    }
+
+    /// What the window's title bar should say.
+    pub(crate) fn title(&self) -> String {
+        let scene = self.doc.scene();
+        let name = if scene.name.is_empty() {
+            "untitled"
+        } else {
+            &scene.name
+        };
+        let file = self
+            .path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map_or("not saved".to_string(), |f| {
+                f.to_string_lossy().into_owned()
+            });
+        format!("{name}{} — {file}", if self.dirty() { " *" } else { "" })
+    }
+
     /// Start over from `scene` (a new or opened file). Clears the history
     /// and the take.
     pub(crate) fn replace(&mut self, scene: Scene, path: Option<PathBuf>) -> Result<(), String> {
         let doc = std::mem::replace(&mut self.doc, Doc::new(scene)?);
         let old_path = std::mem::replace(&mut self.path, path);
+        let old_saved = std::mem::replace(&mut self.saved, self.doc.scene().clone());
         if let Err(e) = self.rebuild() {
             self.doc = doc;
             self.path = old_path;
+            self.saved = old_saved;
             return Err(e);
         }
         self.take.clear();
@@ -510,6 +592,25 @@ impl App {
         Ok(())
     }
 
+    /// Start again from the default scene.
+    pub(crate) fn new_scene(&mut self) -> Result<String, String> {
+        self.replace(Scene::from_json(DEFAULT_SCENE)?, None)?;
+        Ok("new scene".into())
+    }
+
+    pub(crate) fn open_path(&mut self, path: &std::path::Path) -> Result<String, String> {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let scene = Scene::from_json(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        self.replace(scene, Some(path.to_path_buf()))?;
+        Ok(format!("opened {}", path.display()))
+    }
+
+    pub(crate) fn save_to(&mut self, path: PathBuf) -> Result<String, String> {
+        self.path = Some(path);
+        self.save()
+    }
+
+    /// Save to the scene's own file (`phys-scene.json` if it has none).
     pub(crate) fn save(&mut self) -> Result<String, String> {
         let path = self
             .path
@@ -517,7 +618,63 @@ impl App {
             .clone();
         let text = serde_json::to_string_pretty(self.doc.scene()).map_err(|e| e.to_string())?;
         std::fs::write(&path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))?;
+        self.saved = self.doc.scene().clone();
+        // The page and the title bar show whether there are unsaved changes.
+        self.rebuild_notice();
         Ok(format!("saved {}", path.display()))
+    }
+
+    /// Tell the pages and the window that the file or its saved state
+    /// changed, without recompiling anything.
+    fn rebuild_notice(&mut self) {
+        let msg = json!({
+            "type": "file",
+            "path": self.path.as_ref().map(|p| p.display().to_string()),
+            "dirty": self.dirty(),
+        })
+        .to_string();
+        let _ = self.events.send(msg);
+        if let Some(ui) = &self.ui {
+            ui(UiEvent::Title(self.title()));
+        }
+    }
+
+    /// A file action from a page. The desktop window shows the dialog; a
+    /// browser page is asked for what is missing and sends the action again.
+    fn file(
+        &mut self,
+        action: FileAction,
+        path: Option<String>,
+        force: bool,
+    ) -> Result<Option<String>, String> {
+        let path = path.filter(|p| !p.trim().is_empty()).map(PathBuf::from);
+        let needs_path = matches!(action, FileAction::Open | FileAction::SaveAs)
+            || (action == FileAction::Save && self.path.is_none());
+        let discards =
+            matches!(action, FileAction::New | FileAction::Open) && self.dirty() && !force;
+        if (needs_path && path.is_none()) || discards {
+            match &self.ui {
+                Some(ui) => ui(UiEvent::File(action)),
+                None => {
+                    self.reply = Some(json!({
+                        "type": "ask",
+                        "what": action.word(),
+                        "dirty": discards,
+                        "path": self.path.as_ref().map(|p| p.display().to_string()),
+                    }));
+                }
+            }
+            return Ok(None);
+        }
+        match (action, path) {
+            (FileAction::New, _) => self.new_scene().map(Some),
+            (FileAction::Open, Some(p)) => self.open_path(&p).map(Some),
+            (FileAction::SaveAs, Some(p)) | (FileAction::Save, Some(p)) => {
+                self.save_to(p).map(Some)
+            }
+            (FileAction::Save, None) => self.save().map(Some),
+            _ => Ok(None),
+        }
     }
 
     /// Handle one message from a page. `Ok(Some(note))` is shown to that page.
@@ -605,7 +762,10 @@ impl App {
                 self.send(Command::Gain(self.auto_gain * self.volume));
                 Ok(None)
             }
-            ClientMsg::Save => self.save().map(Some),
+            ClientMsg::Save => self.file(FileAction::Save, None, false),
+            ClientMsg::SaveAs { path } => self.file(FileAction::SaveAs, path, false),
+            ClientMsg::Open { path, force } => self.file(FileAction::Open, path, force),
+            ClientMsg::New { force } => self.file(FileAction::New, None, force),
             ClientMsg::Render => self.render_take().map(Some),
             ClientMsg::BowStop => {
                 self.bow_stop();
@@ -706,7 +866,7 @@ async fn client(mut sock: WebSocket, app: Shared) {
                 let Message::Text(text) = msg else { continue };
                 let reply = match app.lock() {
                     Ok(mut a) => match a.handle(text.as_str()) {
-                        Ok(None) => None,
+                        Ok(None) => a.reply.take(),
                         Ok(Some(note)) => Some(json!({"type": "note", "message": note})),
                         Err(e) => Some(json!({"type": "error", "message": e})),
                     },
@@ -828,6 +988,9 @@ pub(crate) fn build(path: Option<PathBuf>, audio: bool) -> Result<Shared, String
         rig: None,
         audio: audio_tx,
         events,
+        ui: None,
+        saved: Scene::default(),
+        reply: None,
         shot: None,
         info: phys_core::sim::Info::default(),
         scene_msg: String::new(),
@@ -837,6 +1000,7 @@ pub(crate) fn build(path: Option<PathBuf>, audio: bool) -> Result<Shared, String
         take_start: None,
         bow_open: None,
     };
+    app.saved = app.doc.scene().clone();
     app.rebuild()?;
     Ok(Arc::new(Mutex::new(app)))
 }

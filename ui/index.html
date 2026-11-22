@@ -36,7 +36,12 @@
     <div class="group">
       <button id="undo" title="Undo (Cmd/Ctrl+Z)">Undo</button>
       <button id="redo" title="Redo (Shift+Cmd/Ctrl+Z)">Redo</button>
-      <button id="save">Save</button>
+    </div>
+    <div class="group">
+      <button id="new" title="Start again from the default scene (Cmd/Ctrl+N in the app)">New</button>
+      <button id="open" title="Open a scene file (Cmd/Ctrl+O in the app)">Open…</button>
+      <button id="save" title="Save the scene (Cmd/Ctrl+S)">Save</button>
+      <button id="saveas" title="Save the scene under a new name">Save As…</button>
     </div>
     <div class="group">
       <button id="render" title="Replay the strikes you made, offline, into a WAV">Render take</button>
@@ -78,6 +83,7 @@
 
   <footer>
     <span id="conn" class="bad">connecting…</span>
+    <span id="file"></span>
     <span id="stats"></span>
     <span class="meter" title="Output level"><i id="level"></i></span>
     <span id="load"></span>

@@ -22,7 +22,9 @@ From a terminal, the same window:
 cargo run --release
 ```
 
-`cargo run --release -- app scene.json` opens a scene file. Closing the window quits.
+`cargo run --release -- scene.json` opens a scene file. Closing the window quits.
+
+The File menu has New, Open, Save and Save As with the system file dialogs, the title bar shows the scene, its file and a `*` while there are unsaved changes, and New, Open and quitting ask before discarding them. The same four buttons are on the page; in a browser, where there is no file dialog, they ask for a path.
 
 In a browser instead:
 
@@ -130,7 +132,7 @@ The state is double precision and nothing is hand-vectorised yet.
 
 ## Known limits
 
-- The desktop window has no File menu: a scene is opened by passing its path, and Save writes to that path (or `phys-scene.json`).
+- Double-clicking a scene file in Finder does not open it in phys; use File > Open, or pass the path on the command line.
 - The MCP server does not open the desktop window; it serves the page for a browser.
 
 - Plates are simply supported; a free-edge plate is not modelled.
