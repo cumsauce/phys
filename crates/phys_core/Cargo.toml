@@ -1,0 +1,15 @@
+[package]
+name = "phys_core"
+description = "phys's physics core: a scene of connected modal parts compiled into a causal, streaming simulation. No UI, no audio device."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+hound.workspace = true
+
+[lints]
+workspace = true

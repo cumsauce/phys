@@ -1,0 +1,38 @@
+[workspace]
+resolver = "3"
+members = ["crates/phys_core", "crates/phys_audio", "crates/phys_app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+phys_core = { path = "crates/phys_core" }
+phys_audio = { path = "crates/phys_audio" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+schemars = "1"
+hound = "3.5"
+cpal = "0.18.2"
+rtrb = "0.3"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 3
+debug = false
+
+# The simulation is unusable unoptimised: keep it fast in dev and test builds.
+[profile.dev.package.phys_core]
+opt-level = 3
+
+[profile.release]
+debug = "line-tables-only"

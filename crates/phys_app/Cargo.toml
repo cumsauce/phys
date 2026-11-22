@@ -1,0 +1,25 @@
+[package]
+name = "phys_app"
+description = "phys: build sounding objects from connected parts and hear them"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "phys"
+path = "src/main.rs"
+
+[dependencies]
+phys_core.workspace = true
+phys_audio.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros", "time", "io-std"] }
+rmcp = { version = "1", features = ["server", "transport-io", "macros"] }
+schemars.workspace = true
+png = "0.18"
+base64 = "0.22"
+
+[lints]
+workspace = true

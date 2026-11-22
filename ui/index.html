@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>phys</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    {"imports": {"three": "./vendor/three.module.min.js"}}
+  </script>
+</head>
+<body>
+  <header>
+    <span class="brand">phys</span>
+    <div class="group" id="tools">
+      <button data-tool="select" title="Select and move (S)">Select</button>
+      <button data-tool="strike" title="Click a part to hit it (H)">Strike</button>
+      <button data-tool="joint" title="Click two points to tie them with a spring; click empty space second to tie to the ground (J)">Joint</button>
+      <button data-tool="pickup" title="Click a part to stick a contact pickup on it (P)">Pickup</button>
+    </div>
+    <div class="group">
+      <select id="add" title="Add something to the scene">
+        <option value="">Add…</option>
+        <option value="plate">Plate</option>
+        <option value="bar">Bar</option>
+        <option value="string">String</option>
+        <option value="membrane">Membrane</option>
+        <option value="mass">Mass</option>
+        <option value="mic">Microphone</option>
+      </select>
+    </div>
+    <div class="group" id="gizmo">
+      <button data-mode="translate" title="Move (W)">Move</button>
+      <button data-mode="rotate" title="Rotate (E)">Rotate</button>
+    </div>
+    <div class="group">
+      <button id="undo" title="Undo (Cmd/Ctrl+Z)">Undo</button>
+      <button id="redo" title="Redo (Shift+Cmd/Ctrl+Z)">Redo</button>
+      <button id="save">Save</button>
+    </div>
+    <div class="group">
+      <button id="render" title="Replay the strikes you made, offline, into a WAV">Render take</button>
+      <button id="clear" title="Forget the recorded strikes">Clear take</button>
+    </div>
+    <div class="spacer"></div>
+    <label class="inline"><input type="checkbox" id="vibes" checked> Show vibration</label>
+    <label class="inline">Volume <input type="range" id="volume" min="0" max="2" step="0.01" value="1"></label>
+  </header>
+
+  <main>
+    <div id="view"></div>
+    <aside>
+      <section id="strikebox">
+        <h2>Mallet</h2>
+        <label>Speed <output id="speed_out"></output><input type="range" id="speed" min="0.2" max="8" step="0.1" value="2"></label>
+        <label>Hardness <output id="hard_out"></output><input type="range" id="hard" min="5" max="10" step="0.1" value="8"></label>
+        <label>Mass <output id="mass_out"></output><input type="range" id="mass" min="-3" max="-0.3" step="0.05" value="-1.7"></label>
+      </section>
+      <section id="inspector"></section>
+    </aside>
+  </main>
+
+  <footer>
+    <span id="conn" class="bad">connecting…</span>
+    <span id="stats"></span>
+    <span class="meter" title="Output level"><i id="level"></i></span>
+    <span id="load"></span>
+    <span class="spacer"></span>
+    <span id="toast"></span>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

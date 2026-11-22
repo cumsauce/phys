@@ -1,0 +1,19 @@
+{
+  "name": "tin_roof_screw",
+  "parts": [
+    {"name": "sheet", "shape": {"kind": "plate", "size": [0.5, 0.5], "thickness": 0.002}, "material": "steel", "loss": 0.01},
+    {"name": "screw", "shape": {"kind": "mass", "mass": 0.005}, "pos": [0.15, 0.01, 0.15]}
+  ],
+  "joints": [
+    {"name": "loose", "kind": "spring", "a": {"part": "screw"}, "b": {"part": "sheet", "at": [0.8, 0.8]}, "stiffness": 2e5, "damping": 2, "gap": 0.0002}
+  ],
+  "exciters": [
+    {"name": "hammer", "kind": "mallet", "on": {"part": "sheet", "at": [0.4, 0.4]}, "mass": 0.4, "stiffness": 5e8}
+  ],
+  "listeners": [
+    {"name": "mic", "kind": "mic", "pos": [0, 0.5, 0.3]}
+  ],
+  "score": [
+    {"t": 0.05, "exciter": "hammer", "strength": 3.0}
+  ]
+}

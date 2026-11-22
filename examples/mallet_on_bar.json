@@ -1,0 +1,17 @@
+{
+  "name": "mallet_on_bar",
+  "parts": [
+    {"name": "bar", "shape": {"kind": "bar", "length": 0.3, "width": 0.04, "thickness": 0.012}, "material": "aluminium"}
+  ],
+  "exciters": [
+    {"name": "mallet", "kind": "mallet", "on": {"part": "bar", "at": [0.5]}, "mass": 0.03, "stiffness": 3e8},
+    {"name": "edge", "kind": "mallet", "on": {"part": "bar", "at": [0.08]}, "mass": 0.03, "stiffness": 3e8}
+  ],
+  "listeners": [
+    {"name": "mic", "kind": "mic", "pos": [0, 0.3, 0.2]}
+  ],
+  "score": [
+    {"t": 0.05, "exciter": "mallet", "strength": 2.0},
+    {"t": 1.5, "exciter": "edge", "strength": 2.0}
+  ]
+}

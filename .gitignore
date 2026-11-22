@@ -1,0 +1,5 @@
+/target
+/out
+*.wav
+.claude/settings.local.json
+phys-scene.json

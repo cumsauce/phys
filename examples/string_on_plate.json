@@ -1,0 +1,20 @@
+{
+  "name": "string_on_plate",
+  "parts": [
+    {"name": "top", "shape": {"kind": "plate", "size": [0.4, 0.3], "thickness": 0.003}, "material": "wood"},
+    {"name": "string", "shape": {"kind": "string", "length": 0.65, "radius": 0.0004, "f0": 196}, "material": "steel", "pos": [0, 0.02, 0]}
+  ],
+  "joints": [
+    {"name": "bridge", "kind": "spring", "a": {"part": "string", "at": [0.95]}, "b": {"part": "top", "at": [0.7, 0.45]}, "stiffness": 2e4}
+  ],
+  "exciters": [
+    {"name": "pick", "kind": "mallet", "on": {"part": "string", "at": [0.18]}, "mass": 0.002, "stiffness": 1e7}
+  ],
+  "listeners": [
+    {"name": "mic", "kind": "mic", "pos": [0.1, 0.4, 0.3]}
+  ],
+  "score": [
+    {"t": 0.05, "exciter": "pick", "strength": 1.5},
+    {"t": 1.5, "exciter": "pick", "strength": 3.0}
+  ]
+}

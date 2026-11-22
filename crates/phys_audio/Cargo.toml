@@ -1,0 +1,14 @@
+[package]
+name = "phys_audio"
+description = "phys's real-time output: the simulation on the audio thread, fed by a lock-free command queue"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+phys_core.workspace = true
+cpal.workspace = true
+rtrb.workspace = true
+
+[lints]
+workspace = true
