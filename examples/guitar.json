@@ -1,0 +1,546 @@
+{
+  "name": "guitar",
+  "settings": {
+    "solver": "sav",
+    "gain_db": 0.0,
+    "regulate": true
+  },
+  "parts": [
+    {
+      "name": "top",
+      "shape": {
+        "kind": "plate",
+        "size": [
+          0.38,
+          0.3
+        ],
+        "thickness": 0.004
+      },
+      "material": "wood",
+      "pos": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "modes": 120
+    },
+    {
+      "name": "back",
+      "shape": {
+        "kind": "plate",
+        "size": [
+          0.38,
+          0.3
+        ],
+        "thickness": 0.0035
+      },
+      "material": "hardwood",
+      "pos": [
+        0.0,
+        -0.09,
+        0.0
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "modes": 80
+    },
+    {
+      "name": "E2",
+      "shape": {
+        "kind": "string",
+        "length": 0.65,
+        "radius": 0.00056,
+        "f0": 81.549
+      },
+      "material": {
+        "young": 4000000000.0,
+        "density": 6000.0,
+        "poisson": 0.3,
+        "loss": 0.002
+      },
+      "pos": [
+        0.2526,
+        0.012,
+        -0.02625
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "loss": 0.002,
+      "damping": 0.5,
+      "modes": 80
+    },
+    {
+      "name": "A2",
+      "shape": {
+        "kind": "string",
+        "length": 0.65,
+        "radius": 0.00043,
+        "f0": 108.812
+      },
+      "material": {
+        "young": 4000000000.0,
+        "density": 6000.0,
+        "poisson": 0.3,
+        "loss": 0.002
+      },
+      "pos": [
+        0.2526,
+        0.012,
+        -0.01575
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "loss": 0.002,
+      "damping": 0.5,
+      "modes": 80
+    },
+    {
+      "name": "D3",
+      "shape": {
+        "kind": "string",
+        "length": 0.65,
+        "radius": 0.00033,
+        "f0": 145.63
+      },
+      "material": {
+        "young": 4000000000.0,
+        "density": 6000.0,
+        "poisson": 0.3,
+        "loss": 0.002
+      },
+      "pos": [
+        0.2526,
+        0.012,
+        -0.00525
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "loss": 0.002,
+      "damping": 0.5,
+      "modes": 80
+    },
+    {
+      "name": "G3",
+      "shape": {
+        "kind": "string",
+        "length": 0.65,
+        "radius": 0.00051,
+        "f0": 193.727
+      },
+      "material": "nylon",
+      "pos": [
+        0.2526,
+        0.012,
+        0.00525
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "loss": 0.001,
+      "damping": 0.5,
+      "modes": 80
+    },
+    {
+      "name": "B3",
+      "shape": {
+        "kind": "string",
+        "length": 0.65,
+        "radius": 0.00041,
+        "f0": 244.289
+      },
+      "material": "nylon",
+      "pos": [
+        0.2526,
+        0.012,
+        0.01575
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "loss": 0.001,
+      "damping": 0.5,
+      "modes": 80
+    },
+    {
+      "name": "E4",
+      "shape": {
+        "kind": "string",
+        "length": 0.65,
+        "radius": 0.00035,
+        "f0": 326.256
+      },
+      "material": "nylon",
+      "pos": [
+        0.2526,
+        0.012,
+        0.02625
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "loss": 0.001,
+      "damping": 0.5,
+      "modes": 80
+    }
+  ],
+  "joints": [
+    {
+      "name": "air_mid",
+      "kind": "spring",
+      "a": {
+        "part": "top",
+        "at": [
+          0.5,
+          0.5
+        ]
+      },
+      "b": {
+        "part": "back",
+        "at": [
+          0.5,
+          0.5
+        ]
+      },
+      "stiffness": 60000.0
+    },
+    {
+      "name": "air_low",
+      "kind": "spring",
+      "a": {
+        "part": "top",
+        "at": [
+          0.27,
+          0.38
+        ]
+      },
+      "b": {
+        "part": "back",
+        "at": [
+          0.27,
+          0.38
+        ]
+      },
+      "stiffness": 40000.0
+    },
+    {
+      "name": "air_high",
+      "kind": "spring",
+      "a": {
+        "part": "top",
+        "at": [
+          0.72,
+          0.63
+        ]
+      },
+      "b": {
+        "part": "back",
+        "at": [
+          0.72,
+          0.63
+        ]
+      },
+      "stiffness": 40000.0
+    },
+    {
+      "name": "saddle_E2",
+      "kind": "spring",
+      "a": {
+        "part": "E2",
+        "at": [
+          0.012
+        ]
+      },
+      "b": {
+        "part": "top",
+        "at": [
+          0.33,
+          0.4125
+        ]
+      },
+      "stiffness": 30000.0
+    },
+    {
+      "name": "saddle_A2",
+      "kind": "spring",
+      "a": {
+        "part": "A2",
+        "at": [
+          0.012
+        ]
+      },
+      "b": {
+        "part": "top",
+        "at": [
+          0.33,
+          0.4475
+        ]
+      },
+      "stiffness": 30000.0
+    },
+    {
+      "name": "saddle_D3",
+      "kind": "spring",
+      "a": {
+        "part": "D3",
+        "at": [
+          0.012
+        ]
+      },
+      "b": {
+        "part": "top",
+        "at": [
+          0.33,
+          0.4825
+        ]
+      },
+      "stiffness": 30000.0
+    },
+    {
+      "name": "saddle_G3",
+      "kind": "spring",
+      "a": {
+        "part": "G3",
+        "at": [
+          0.012
+        ]
+      },
+      "b": {
+        "part": "top",
+        "at": [
+          0.33,
+          0.5175
+        ]
+      },
+      "stiffness": 30000.0
+    },
+    {
+      "name": "saddle_B3",
+      "kind": "spring",
+      "a": {
+        "part": "B3",
+        "at": [
+          0.012
+        ]
+      },
+      "b": {
+        "part": "top",
+        "at": [
+          0.33,
+          0.5525
+        ]
+      },
+      "stiffness": 30000.0
+    },
+    {
+      "name": "saddle_E4",
+      "kind": "spring",
+      "a": {
+        "part": "E4",
+        "at": [
+          0.012
+        ]
+      },
+      "b": {
+        "part": "top",
+        "at": [
+          0.33,
+          0.5875
+        ]
+      },
+      "stiffness": 30000.0
+    }
+  ],
+  "exciters": [
+    {
+      "name": "pluck_E2",
+      "kind": "mallet",
+      "on": {
+        "part": "E2",
+        "at": [
+          0.2
+        ]
+      },
+      "mass": 0.0012,
+      "stiffness": 1500000.0
+    },
+    {
+      "name": "pluck_A2",
+      "kind": "mallet",
+      "on": {
+        "part": "A2",
+        "at": [
+          0.2
+        ]
+      },
+      "mass": 0.0012,
+      "stiffness": 1500000.0
+    },
+    {
+      "name": "pluck_D3",
+      "kind": "mallet",
+      "on": {
+        "part": "D3",
+        "at": [
+          0.2
+        ]
+      },
+      "mass": 0.0012,
+      "stiffness": 1500000.0
+    },
+    {
+      "name": "pluck_G3",
+      "kind": "mallet",
+      "on": {
+        "part": "G3",
+        "at": [
+          0.2
+        ]
+      },
+      "mass": 0.0012,
+      "stiffness": 1500000.0
+    },
+    {
+      "name": "pluck_B3",
+      "kind": "mallet",
+      "on": {
+        "part": "B3",
+        "at": [
+          0.2
+        ]
+      },
+      "mass": 0.0012,
+      "stiffness": 1500000.0
+    },
+    {
+      "name": "pluck_E4",
+      "kind": "mallet",
+      "on": {
+        "part": "E4",
+        "at": [
+          0.2
+        ]
+      },
+      "mass": 0.0012,
+      "stiffness": 1500000.0
+    }
+  ],
+  "listeners": [
+    {
+      "name": "mic_left",
+      "kind": "mic",
+      "pos": [
+        -0.15,
+        0.45,
+        0.35
+      ],
+      "gain_db": 0.0,
+      "pan": -0.6
+    },
+    {
+      "name": "mic_right",
+      "kind": "mic",
+      "pos": [
+        0.25,
+        0.45,
+        0.35
+      ],
+      "gain_db": 0.0,
+      "pan": 0.6
+    }
+  ],
+  "score": [
+    {
+      "t": 0.1,
+      "exciter": "pluck_E2",
+      "strength": 2.5
+    },
+    {
+      "t": 0.42,
+      "exciter": "pluck_A2",
+      "strength": 2.5
+    },
+    {
+      "t": 0.74,
+      "exciter": "pluck_D3",
+      "strength": 2.5
+    },
+    {
+      "t": 1.06,
+      "exciter": "pluck_G3",
+      "strength": 2.5
+    },
+    {
+      "t": 1.38,
+      "exciter": "pluck_B3",
+      "strength": 2.5
+    },
+    {
+      "t": 1.7,
+      "exciter": "pluck_E4",
+      "strength": 2.5
+    },
+    {
+      "t": 2.02,
+      "exciter": "pluck_B3",
+      "strength": 2.5
+    },
+    {
+      "t": 2.34,
+      "exciter": "pluck_G3",
+      "strength": 2.5
+    },
+    {
+      "t": 3.16,
+      "exciter": "pluck_E2",
+      "strength": 3.0
+    },
+    {
+      "t": 3.178,
+      "exciter": "pluck_A2",
+      "strength": 3.0
+    },
+    {
+      "t": 3.196,
+      "exciter": "pluck_D3",
+      "strength": 3.0
+    },
+    {
+      "t": 3.214,
+      "exciter": "pluck_G3",
+      "strength": 3.0
+    },
+    {
+      "t": 3.232,
+      "exciter": "pluck_B3",
+      "strength": 3.0
+    },
+    {
+      "t": 3.25,
+      "exciter": "pluck_E4",
+      "strength": 3.0
+    }
+  ]
+}

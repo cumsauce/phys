@@ -2,15 +2,38 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "guitar",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": [
+        "run",
+        "--release",
+        "--",
+        "edit",
+        "examples/guitar.json"
+      ],
+      "port": 7878
+    },
+    {
       "name": "editor",
       "runtimeExecutable": "cargo",
-      "runtimeArgs": ["run", "--", "edit"],
+      "runtimeArgs": [
+        "run",
+        "--",
+        "edit"
+      ],
       "port": 7878
     },
     {
       "name": "editor-silent",
       "runtimeExecutable": "cargo",
-      "runtimeArgs": ["run", "--", "edit", "--no-audio", "--port", "7879"],
+      "runtimeArgs": [
+        "run",
+        "--",
+        "edit",
+        "--no-audio",
+        "--port",
+        "7879"
+      ],
       "port": 7879
     }
   ]
