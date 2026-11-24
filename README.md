@@ -133,6 +133,12 @@ Two things here go beyond that paper and are this project's own: the gauge (the 
 
 A pluck is a force that swells as a finger pulls the point aside, then lets go in under a millisecond. A bow is friction against a moving surface, gripping at low relative speed and letting go as the part slips; each step it is treated as a damper on the relative speed with its coefficient frozen, after Russo, Ducceschi and Bilbao, "Efficient Simulation of the Bowed String in Modal Form" (DAFx 2022). That keeps the update explicit: each bow adds one rank-one term, solved together with the auxiliary variable's in a small system.
 
+A damper is extra viscous damping on each mode the felt touches, in proportion to how much the mode moves under it. Raising or dropping one changes how far a force moves those modes in a step, so the linear joints are factored again on the spot, without allocating.
+
+Parts held by a damper sleep (this project's own). A part with a damper and one joint, a plain spring to a part without dampers (a piano string on its soundboard), is taken out of the simulation with its joint once its damper has stopped it, and comes back when its key goes down. The cost of an instrument then follows the notes sounding, not the strings it has. While it sleeps the part still holds its host as a spring: the joint's stiffness in series with the part's own give at that point. The host's modes are solved once at compile time with that spring in place for every sleeper, so it costs nothing as it runs; a part that is awake carries a second joint of minus that stiffness, which takes its stand-in off again. Waking, the part starts bent as its host holds it, so the real joint takes over with the same pull, and whatever a swap would add to the energy is taken back by scaling the state. What is lost while a part sleeps is its damping of the host and its own resonances as the host sees them: in the piano example the level of a note differs from the full simulation by about 0.5 dB, up to 2 dB.
+
+The linear joints take one pass of dot products and one of pushes over the joints in play each step: what the joints pull with from the step before is folded into the implicit solve, and the port differences it needs are carried from step to step rather than worked out again.
+
 The `explicit` solver (`"settings": {"solver": "explicit"}`) applies joint forces as they stand with automatic oversampling, as sounder's rig does. It is kept as a reference.
 
 ### Solver comparison
@@ -154,19 +160,20 @@ The `explicit` solver (`"settings": {"solver": "explicit"}`) applies joint force
 
 | Modes | Times real time |
 |---|---|
-| 250 | 16.8 |
-| 500 | 7.6 |
-| 1000 | 3.6 |
-| 2000 | 1.7 |
-| 4000 | 0.8 |
+| 250 | 23.2 |
+| 500 | 11.2 |
+| 1000 | 5.5 |
+| 2000 | 2.4 |
+| 4000 | 1.2 |
 
-The state is double precision and nothing is hand-vectorised yet.
+The state is double precision; only the joints' dot products are summed four abreast for the compiler to vectorise. The piano example (1190 modes, 39 strings on a soundboard) runs at 14 times real time while a note or two sound.
 
 ## Known limits
 
 - Double-clicking a scene file in Finder does not open it in phys; use File > Open, or pass the path on the command line.
 - The MCP server does not open the desktop window; it serves the page for a browser.
 
+- With every damped part awake at once (Tune, or every key held) a scene with sleepers costs more than it would without them, since each awake sleeper carries two joints.
 - Plates are simply supported; a free-edge plate is not modelled.
 - Parts do not move as rigid bodies: a bar rings but does not bounce or fall.
 - A microphone hears each part through a rough radiation weight per mode, not a real radiation model. Contact pickups are exact for the model.

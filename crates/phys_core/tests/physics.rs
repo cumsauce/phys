@@ -488,3 +488,111 @@ fn a_falling_damper_never_adds_energy_to_a_string_tied_to_a_plate() {
     }
     assert!(last < start * 1e-3, "energy {start} only fell to {last}");
 }
+
+/// Three damped strings on a plate, each with a hammer: the strings can
+/// sleep, and the plate's modes are solved with their stand-in springs.
+fn keyed_plate(dampers: bool) -> String {
+    let mut parts = String::new();
+    let mut joints = String::new();
+    let mut exciters = String::new();
+    for (i, hz) in [196.0, 247.0, 294.0].iter().enumerate() {
+        let z = 0.03 * i as f64;
+        parts += &format!(
+            r#", {{"name": "s{i}", "shape": {{"kind": "string", "length": 0.6, "f0": {hz}}}, "pos": [0.1, 0.02, {z}]}}"#
+        );
+        joints += &format!(
+            r#"{}{{"name": "b{i}", "kind": "spring", "a": {{"part": "s{i}", "at": [0.95]}}, "b": {{"part": "top", "at": [0.7, {}]}}, "stiffness": 5e4}}"#,
+            if i == 0 { "" } else { ", " },
+            0.3 + 0.15 * i as f64
+        );
+        exciters += &format!(
+            r#"{}{{"name": "h{i}", "kind": "mallet", "on": {{"part": "s{i}", "at": [0.15]}}, "mass": 0.004, "stiffness": 1e7}}"#,
+            if i == 0 { "" } else { ", " }
+        );
+        if dampers {
+            exciters += &format!(
+                r#", {{"name": "d{i}", "kind": "damper", "on": {{"part": "s{i}", "at": [0.15]}}, "damping": 2}}"#
+            );
+        }
+    }
+    format!(
+        r#"{{
+      "parts": [{{"name": "top", "shape": {{"kind": "plate", "size": [0.5, 0.4], "thickness": 0.004}}, "material": "wood"}}{parts}],
+      "joints": [{joints}],
+      "exciters": [{exciters}],
+      "listeners": [{{"name": "mic", "kind": "mic", "pos": [0.1, 0.4, 0.3]}}]
+    }}"#
+    )
+}
+
+#[test]
+fn with_every_damper_lifted_the_sound_is_the_scene_without_dampers() {
+    // The stand-in springs solved into the plate are all taken off again
+    // while the strings are awake: nothing of them may be left in the sound.
+    let play = |dampers: bool| {
+        let s = scene(&keyed_plate(dampers));
+        let mut sim = Sim::compile(&s, f64::from(SR)).expect("compiles");
+        sim.dampers(false);
+        for i in 0..3 {
+            sim.excite(sim.exciter(&format!("h{i}")).expect("hammer"), 2.0);
+        }
+        let mut buf = vec![0.0f32; 2 * SR as usize];
+        sim.process(&mut buf);
+        buf
+    };
+    let (with, without) = (play(true), play(false));
+    let diff: Vec<f32> = with.iter().zip(&without).map(|(a, b)| a - b).collect();
+    assert!(rms(&without) > 0.0);
+    // Not to the last bit: the plate's damping is shared out among its new
+    // modes, and the two are stepped in time a little differently.
+    assert!(
+        rms(&diff) < rms(&without) * 0.02,
+        "differs by {} of {}",
+        rms(&diff),
+        rms(&without)
+    );
+}
+
+#[test]
+fn sleeping_and_waking_strings_never_add_energy_and_still_play_in_tune() {
+    let s = scene(&keyed_plate(true));
+    let mut sim = Sim::compile(&s, f64::from(SR)).expect("compiles");
+    let ex = |sim: &Sim, name: &str| sim.exciter(name).expect("exciter");
+    let mut buf = vec![0.0f32; 2 * 256];
+    let mut heard: Vec<f32> = Vec::new();
+    let mut last = f64::INFINITY;
+    // Each key in turn, twice round: down for 0.2 s, then up for 0.6 s
+    // while the others sleep.
+    for round in 0..6 {
+        let i = round % 3;
+        for block in 0..150 {
+            if block == 0 {
+                sim.excite(ex(&sim, &format!("d{i}")), 1.0);
+                sim.excite(ex(&sim, &format!("h{i}")), 2.0);
+                last = f64::INFINITY;
+            }
+            if block == 38 {
+                sim.excite(ex(&sim, &format!("d{i}")), 0.0);
+            }
+            sim.process(&mut buf);
+            let e = sim.energy();
+            // A hammer brings energy in with it; after that it only falls.
+            if block > 0 {
+                assert!(
+                    e <= last * (1.0 + 1e-9) + 1e-18,
+                    "round {round} block {block}: energy rose from {last} to {e}"
+                );
+            }
+            last = e;
+            if round == 4 && block < 38 {
+                heard.extend(buf.as_chunks::<2>().0.iter().map(|f| 0.5 * (f[0] + f[1])));
+            }
+        }
+    }
+    assert!(!sim.blown());
+    // The second time round, the 247 Hz string woke from sleep and sounds
+    // where the joint to the plate leaves it (a little sharp of 247 Hz).
+    let f = peak_near(&heard, 250.0, 0.06);
+    assert!((f / 250.0 - 1.0).abs() < 0.04, "woken string sounds at {f}");
+    assert!(rms(&heard) > 0.0);
+}

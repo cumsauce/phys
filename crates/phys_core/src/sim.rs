@@ -251,11 +251,59 @@ struct Bow {
 struct Damper {
     x: Seg,
     down: bool,
+    part: usize,
+}
+
+/// Steps between looks at which parts can sleep.
+const WATCH: usize = 256;
+/// A part sleeps once its energy is this far below what it had when its
+/// damper fell (-60 dB), or below `STILL` joules.
+const QUIET: f64 = 1e-6;
+const STILL: f64 = 1e-20;
+
+/// What putting a part to sleep needs to know. A part held by a damper
+/// that has stopped ringing is left out of the simulation, along with the
+/// joint that ties it to its host, until something plays it again: the cost
+/// of an instrument then follows the notes sounding, not the strings it has.
+///
+/// A sleeping part still holds its host: to something moving slowly it is
+/// a spring, the joint's stiffness in series with the part's own give at
+/// that point. The host's modes are solved at compile time with that
+/// spring in place for every part that can sleep, which costs nothing as
+/// it runs. A part that is awake has its real joint, and a second one of
+/// minus that stiffness to take its stand-in spring away again: with every
+/// part awake the system is the one in the scene (to within how the host's
+/// damping is shared among its new modes). What is given up while a part
+/// sleeps is its damping of the host and its own resonances as the host
+/// sees them.
+#[derive(Clone, Debug)]
+struct Rest {
+    /// It has a damper and one joint, a linear spring to a part that
+    /// never sleeps.
+    can: bool,
+    /// That joint, among the linear ones, and its stand-in stiffness: the
+    /// force on the part per metre its host has moved, once it has settled.
+    joint: usize,
+    gain: f64,
+    /// Its state is zero and out of the simulation.
+    zeroed: bool,
+    /// Its dampers stop its lowest mode within a second (15 dB in a quarter
+    /// of one), so if it has not fallen 10 dB in that time what moves it
+    /// comes from outside, and its stand-in spring answers for that.
+    strong: bool,
+    asleep: bool,
+    /// The most energy seen since its dampers fell, J.
+    peak: f64,
+    /// The energy a quarter of a second ago, and looks since.
+    mark: f64,
+    age: usize,
 }
 
 #[derive(Clone, Debug)]
 struct Tap {
     w: Wv,
+    /// The part it hears: a sleeping part is skipped.
+    part: usize,
     gain: f64,
     line: Vec<f64>,
     pos: usize,
@@ -319,6 +367,33 @@ pub struct Sim {
     lin_s: Vec<f64>,
     lin_inv: Vec<f64>,
     dense: Vec<f64>,
+    /// The linear joints in play (those with no end on a sleeping part).
+    /// `lin_m`, `lin_p` and the vectors below are packed in this order.
+    lin_on: Vec<usize>,
+    lin_live: Vec<bool>,
+    /// P = W D W^T over the joints in play.
+    lin_p: Vec<f64>,
+    /// The parts each joint touches (`usize::MAX`: the ground or a mallet).
+    lin_parts: Vec<[usize; 2]>,
+    non_parts: Vec<[usize; 2]>,
+    /// A mallet waiting over a sleeping part: its joint is skipped.
+    non_idle: Vec<bool>,
+    /// Scratch for the joint solve, and the joints' port differences W q
+    /// and W q1 carried from step to step while nothing else moved the state.
+    lin_r: Vec<f64>,
+    lin_f: Vec<f64>,
+    lin_e: Vec<f64>,
+    lin_e1: Vec<f64>,
+    lin_en: Vec<f64>,
+    e_ok: bool,
+    e1_ok: bool,
+    rests: Vec<Rest>,
+    /// A part fell asleep or woke: the joints in play are out of date.
+    rest_dirty: bool,
+    /// Steps until the next look at who can sleep.
+    watch_in: usize,
+    /// The mode ranges of the parts that are awake, and the mallets.
+    ranges: Vec<(usize, usize)>,
     lin_y: Vec<f64>,
     /// Joints stepped through `psi`, or explicitly.
     nonlinear: Vec<Joint>,
@@ -415,25 +490,33 @@ fn invert_into(m: &mut [f64], inv: &mut [f64], n: usize) -> bool {
     true
 }
 
-/// Factor the implicit linear joints for the mode coefficients `d`:
-/// `lin_m` <- (I + K P)^-1 K with P[i][j] = w_i . D w_j and K = diag(`kp`).
-/// False, with `lin_m` left as it was, when the system is singular. `dense`
-/// (one per mode) must be zero and is left zero; `s` and `inv` are J x J
-/// scratch. Does not allocate.
+/// Factor the implicit linear joints in play (`on`: indices into `linear`
+/// and `kp`) for the mode coefficients `d`: `lin_p` <- P with
+/// P[i][j] = w_i . D w_j, and `lin_m` <- (I + K P)^-1 K with K = diag(`kp`),
+/// both J x J over the joints in play, in the order of `on`. False, with
+/// `lin_m` left as it was, when the system is singular. `dense` (one per
+/// mode) must be zero and is left zero; `s` and `inv` are scratch. Does not
+/// allocate.
+#[allow(clippy::too_many_arguments)]
 fn factor_linear(
     linear: &[Joint],
+    on: &[usize],
     kp: &[f64],
     d: &[f64],
     dense: &mut [f64],
     s: &mut [f64],
     inv: &mut [f64],
     lin_m: &mut [f64],
+    lin_p: &mut [f64],
 ) -> bool {
-    let nl = linear.len();
-    for (j, joint) in linear.iter().enumerate() {
+    let nl = on.len();
+    for (j, &jj) in on.iter().enumerate() {
+        let joint = &linear[jj];
         joint.w.push(dense, d, 1.0);
-        for (i, other) in linear.iter().enumerate() {
-            s[i * nl + j] = kp[i] * other.w.dot(dense) + if i == j { 1.0 } else { 0.0 };
+        for (i, &ii) in on.iter().enumerate() {
+            let p = linear[ii].w.dot(dense);
+            lin_p[i * nl + j] = p;
+            s[i * nl + j] = kp[ii] * p + if i == j { 1.0 } else { 0.0 };
         }
         for seg in &joint.w.0 {
             dense[seg.start..seg.start + seg.w.len()]
@@ -441,12 +524,12 @@ fn factor_linear(
                 .for_each(|x| *x = 0.0);
         }
     }
-    if !invert_into(s, inv, nl) {
+    if !invert_into(&mut s[..nl * nl], &mut inv[..nl * nl], nl) {
         return false;
     }
     for i in 0..nl {
-        for j in 0..nl {
-            lin_m[i * nl + j] = inv[i * nl + j] * kp[j];
+        for (j, &jj) in on.iter().enumerate() {
+            lin_m[i * nl + j] = inv[i * nl + j] * kp[jj];
         }
     }
     true
@@ -501,6 +584,155 @@ struct Pending {
     damping: f64,
     /// A mallet: the mass that plays the role of `a`.
     mallet: Option<f64>,
+    /// The part whose sleep takes this joint out of play, when that is not
+    /// one of its ends (the spring that cancels a sleeper's stand-in).
+    owner: Option<usize>,
+}
+
+/// A part that can be put to sleep (see `Rest`).
+struct Sleeper {
+    part: usize,
+    host: usize,
+    /// Its joint, among the scene's.
+    joint: usize,
+    /// Where the joint meets the host, and along which direction.
+    at: Port,
+    dir: V3,
+    /// The stand-in spring's stiffness, N/m.
+    spring: f64,
+}
+
+/// Find the parts that can sleep, and solve their hosts' modes again with
+/// each sleeper's stand-in spring in place. A part can sleep when it has a
+/// damper and exactly one joint, a plain spring to a part without dampers.
+/// A host is left alone, and its parts never sleep, if taking the springs
+/// off again could leave the scheme without a positive energy.
+fn sleepers(scene: &Scene, bakes: &mut [Bake], sample_rate: f64) -> Vec<Sleeper> {
+    let st = &scene.settings;
+    if st.solver != Solver::Sav {
+        return Vec::new();
+    }
+    let index = |name: &str| scene.parts.iter().position(|p| p.name == name);
+    let damped: Vec<bool> = scene
+        .parts
+        .iter()
+        .map(|p| {
+            scene
+                .exciters
+                .iter()
+                .any(|e| e.kind == ExciterKind::Damper && e.on.part == p.name)
+        })
+        .collect();
+    let mut found: Vec<Sleeper> = Vec::new();
+    for (part, p) in scene.parts.iter().enumerate() {
+        if !damped[part] || bakes[part].modes.iter().any(|m| m.hz <= 0.0) {
+            continue;
+        }
+        let mut mine =
+            scene.joints.iter().enumerate().filter(|(_, j)| {
+                j.a.part == p.name || j.b.as_ref().is_some_and(|b| b.part == p.name)
+            });
+        let (Some((joint, j)), None) = (mine.next(), mine.next()) else {
+            continue;
+        };
+        let plain = j.kind == JointKind::Spring
+            && j.cubic.unwrap_or(0.0) == 0.0
+            && j.gap.unwrap_or(0.0) == 0.0;
+        let (Some(a), Some(b)) = (index(&j.a.part), j.b.as_ref().and_then(|b| index(&b.part)))
+        else {
+            continue;
+        };
+        let host = if a == part { b } else { a };
+        if !plain || a == b || damped[host] {
+            continue;
+        }
+        let dir = j.dir.and_then(unit).unwrap_or_else(|| bakes[a].normal());
+        let (near, far) = match (&j.b, a == part) {
+            (Some(b), true) => (&j.a, b),
+            (Some(b), false) => (b, &j.a),
+            (None, _) => continue,
+        };
+        // How far the part gives per newton at the joint, at rest.
+        let give: f64 = bakes[part]
+            .weights(near, dir)
+            .iter()
+            .zip(&bakes[part].modes)
+            .map(|(w, m)| w * w / (m.mass * (2.0 * std::f64::consts::PI * m.hz).powi(2)))
+            .sum();
+        let ks = j.stiffness.unwrap_or(1e4);
+        found.push(Sleeper {
+            part,
+            host,
+            joint,
+            at: far.clone(),
+            dir,
+            spring: ks / (1.0 + ks * give),
+        });
+    }
+    let k = 1.0 / (sample_rate * f64::from(st.oversample.unwrap_or(1)));
+    let mut hosts: Vec<usize> = found.iter().map(|s| s.host).collect();
+    hosts.sort_unstable();
+    hosts.dedup();
+    for host in hosts {
+        let springs: Vec<(Vec<f64>, f64)> = found
+            .iter()
+            .filter(|s| s.host == host)
+            .map(|s| (bakes[host].weights(&s.at, s.dir), s.spring))
+            .collect();
+        let plain = bakes[host].copy();
+        bakes[host].load(&springs);
+        // With every sleeper awake the springs are all taken off again:
+        // what is left of the host's stiffness, as the scheme sees it, must
+        // still be positive.
+        let n = bakes[host].modes.len();
+        let mut left = vec![0.0; n * n];
+        for (i, m) in bakes[host].modes.iter().enumerate() {
+            let w = 2.0 * std::f64::consts::PI * m.hz;
+            let s = m.sigma;
+            let turn = if w >= s {
+                ((w * w - s * s).sqrt() * k).cos()
+            } else {
+                ((s * s - w * w).sqrt() * k).cosh()
+            };
+            let lead = 1.0 + (s * k).tanh();
+            left[i * n + i] = m.mass * (2.0 - 2.0 * (-s * k).exp() * turn * lead) / (k * k);
+        }
+        for s in found.iter().filter(|s| s.host == host) {
+            let w = bakes[host].weights(&s.at, s.dir);
+            for i in 0..n {
+                for j in 0..n {
+                    left[i * n + j] -= s.spring * w[i] * w[j];
+                }
+            }
+        }
+        if !positive(&mut left, n) {
+            bakes[host] = plain;
+            found.retain(|s| s.host != host);
+        }
+    }
+    found
+}
+
+/// Whether a symmetric matrix (row-major, n x n) is positive definite, by
+/// Cholesky; destroys it.
+fn positive(a: &mut [f64], n: usize) -> bool {
+    for j in 0..n {
+        for k in 0..j {
+            let l = a[j * n + k];
+            for i in j..n {
+                a[i * n + j] -= a[i * n + k] * l;
+            }
+        }
+        let d = a[j * n + j];
+        if !(d > 0.0 && d.is_finite()) {
+            return false;
+        }
+        let root = d.sqrt();
+        for i in j..n {
+            a[i * n + j] /= root;
+        }
+    }
+    true
 }
 
 /// How to compile a scene.
@@ -593,11 +825,12 @@ impl Sim {
         }
         let st = &scene.settings;
         let max_hz = st.max_hz.unwrap_or(16_000.0).min(0.45 * sample_rate);
-        let bakes: Vec<Bake> = scene
+        let mut bakes: Vec<Bake> = scene
             .parts
             .iter()
             .map(|p| bake(p, max_hz))
             .collect::<Result<_, _>>()?;
+        let sleepers = sleepers(scene, &mut bakes, sample_rate);
         let find = |port: &Port| -> Result<usize, String> {
             scene
                 .parts
@@ -647,6 +880,25 @@ impl Sim {
                 offset,
                 damping: j.damping.unwrap_or(0.0),
                 mallet: None,
+                owner: None,
+            });
+        }
+        // Take each sleeper's stand-in spring off its host again while the
+        // sleeper is awake.
+        for sl in &sleepers {
+            pending.push(Pending {
+                name: format!("the stand-in for `{}`", scene.parts[sl.part].name),
+                a: Some((sl.host, bakes[sl.host].weights(&sl.at, sl.dir))),
+                b: None,
+                law: Law::Spring {
+                    k: -sl.spring,
+                    k3: 0.0,
+                    gap: 0.0,
+                },
+                offset: 0.0,
+                damping: 0.0,
+                mallet: None,
+                owner: Some(sl.part),
             });
         }
         enum Src {
@@ -679,6 +931,7 @@ impl Sim {
                         offset: 0.0,
                         damping: e.damping.unwrap_or(0.3),
                         mallet: Some(e.mass.unwrap_or(0.02)),
+                        owner: None,
                     });
                 }
                 ExciterKind::Impulse => exciter_src.push(Src::Impulse(on, w)),
@@ -713,6 +966,7 @@ impl Sim {
                 offset: 0.0,
                 damping: 0.3,
                 mallet: Some(0.02),
+                owner: None,
             });
             pending.len() - 1
         });
@@ -907,15 +1161,35 @@ impl Sim {
         }
 
         let (mut linear, mut nonlinear) = (Vec::new(), Vec::new());
+        // The parts each joint touches, and which parts something other
+        // than a linear spring or a mallet holds on to.
+        let (mut lin_parts, mut non_parts) = (Vec::new(), Vec::new());
+        let mut held = vec![false; bakes.len()];
         // Where each pending joint went: (is linear, index).
         let mut placed = Vec::with_capacity(joints.len());
-        for (j, lin) in joints {
+        for ((j, lin), p) in joints.into_iter().zip(&pending) {
+            let ends = match p.owner {
+                Some(owner) => [owner, usize::MAX],
+                None => [
+                    p.a.as_ref().map_or(usize::MAX, |a| a.0),
+                    p.b.as_ref().map_or(usize::MAX, |b| b.0),
+                ],
+            };
             if lin && solver == Solver::Sav {
                 placed.push((true, linear.len()));
                 linear.push(j);
+                lin_parts.push(ends);
             } else {
+                if p.mallet.is_none() {
+                    for e in ends {
+                        if let Some(h) = held.get_mut(e) {
+                            *h = true;
+                        }
+                    }
+                }
                 placed.push((false, nonlinear.len()));
                 nonlinear.push(j);
+                non_parts.push(ends);
             }
         }
         let nl = linear.len();
@@ -932,17 +1206,23 @@ impl Sim {
                 kp[i] = 0.5 * ks + j.damping / (2.0 * k);
                 lin_prev.push(0.5 * ks - j.damping / (2.0 * k));
             }
-            if !factor_linear(
+        }
+        let lin_on: Vec<usize> = (0..nl).collect();
+        let mut lin_p = vec![0.0; nl * nl];
+        if nl > 0
+            && !factor_linear(
                 &linear,
+                &lin_on,
                 &kp,
                 &d,
                 &mut dense,
                 &mut lin_s,
                 &mut lin_inv,
                 &mut lin_m,
-            ) {
-                return Err("the linear joints form a singular system".to_string());
-            }
+                &mut lin_p,
+            )
+        {
+            return Err("the linear joints form a singular system".to_string());
         }
 
         let mut exciters = Vec::new();
@@ -1023,7 +1303,11 @@ impl Sim {
                     for (x, m) in x.w.iter_mut().zip(&mass[x.start..]) {
                         *x *= k / (2.0 * m);
                     }
-                    dampers.push(Damper { x, down: true });
+                    dampers.push(Damper {
+                        x,
+                        down: true,
+                        part,
+                    });
                 }
                 Src::HandPluck => {
                     hand_push = Some(pushes.len());
@@ -1047,6 +1331,7 @@ impl Sim {
                     let part = find(port)?;
                     let w = bakes[part].weights(port, direction(l.dir, part));
                     taps.push(Tap {
+                        part,
                         w: Wv(vec![compress(part, &w, 1.0)]),
                         gain: 1.0,
                         line: vec![0.0],
@@ -1064,6 +1349,7 @@ impl Sim {
                         let dist = len(sub(pos, b.pos));
                         let delay = (dist / SPEED_OF_SOUND * sample_rate).round() as usize;
                         taps.push(Tap {
+                            part,
                             w: Wv(vec![compress(part, &rad, 1.0)]),
                             gain: 1.0 / dist.max(0.05),
                             line: vec![0.0; delay + 1],
@@ -1093,6 +1379,47 @@ impl Sim {
             warnings,
         };
         let omega = hz.iter().map(|f| 2.0 * std::f64::consts::PI * f).collect();
+        let rests: Vec<Rest> = (0..bakes.len())
+            .map(|part| {
+                let mine = || dampers.iter().filter(move |d| d.part == part);
+                // The decay rate the dampers add to the part's lowest mode.
+                let rate: f64 = mine().filter_map(|d| d.x.w.first()).sum::<f64>() / k;
+                let mut rest = Rest {
+                    can: false,
+                    joint: 0,
+                    gain: 0.0,
+                    zeroed: false,
+                    strong: rate > 6.9,
+                    asleep: false,
+                    peak: 0.0,
+                    mark: f64::INFINITY,
+                    age: 0,
+                };
+                let Some(sl) = sleepers.iter().find(|s| s.part == part) else {
+                    return rest;
+                };
+                // Scene joints come first among the pending ones, in order.
+                let (is_linear, at) = placed[sl.joint];
+                if !is_linear || held[part] {
+                    return rest;
+                }
+                // How far the part's end of the joint gives per newton, with
+                // the stiffness the scheme sees.
+                let (first, len) = (start[part], part_ranges[part].2);
+                let mut give = 0.0;
+                for seg in linear[at].w.0.iter().filter(|s| s.start == first) {
+                    for (w, st) in seg.w.iter().zip(&stiff[first..first + len]) {
+                        give += w * w / st;
+                    }
+                }
+                let Law::Spring { k: ks, .. } = linear[at].law else {
+                    return rest;
+                };
+                (rest.can, rest.joint, rest.gain) = (true, at, ks / (1.0 + ks * give));
+                rest
+            })
+            .collect();
+        let non_idle = vec![false; nonlinear.len()];
         let mut sim = Sim {
             omega,
             pushes,
@@ -1133,6 +1460,27 @@ impl Sim {
             lin_s,
             lin_inv,
             dense,
+            lin_on,
+            lin_live: vec![true; nl],
+            lin_p,
+            lin_parts,
+            non_parts,
+            non_idle,
+            lin_r: vec![0.0; nl],
+            lin_f: vec![0.0; nl],
+            lin_e: vec![0.0; nl],
+            lin_e1: vec![0.0; nl],
+            lin_en: vec![0.0; nl],
+            e_ok: false,
+            e1_ok: false,
+            ranges: {
+                let mut r = Vec::with_capacity(rests.len() + 1);
+                r.push((0, n));
+                r
+            },
+            rests,
+            rest_dirty: false,
+            watch_in: WATCH,
             q: vec![0.0; n],
             q1: vec![0.0; n],
             qn: vec![0.0; n],
@@ -1158,7 +1506,7 @@ impl Sim {
             sim.place_bow(b);
         }
         if sim.damp_dirty {
-            sim.refresh_dampers();
+            sim.refresh();
         }
         sim.reset();
         Ok((sim, Rig { bakes, start, keep }))
@@ -1194,8 +1542,85 @@ impl Sim {
             self.q1[a].copy_from_slice(&old.q1[b]);
             any = true;
         }
+        self.wake_all();
         self.settle();
         any
+    }
+
+    /// The part that mode `mode` belongs to.
+    fn part_at(&self, mode: usize) -> Option<usize> {
+        self.part_ranges
+            .iter()
+            .position(|(_, start, len)| (*start..*start + *len).contains(&mode))
+    }
+
+    /// Something is about to play this part: bring it back into the
+    /// simulation, and start watching it afresh.
+    fn wake(&mut self, part: usize) {
+        if let Some(r) = self.rests.get_mut(part) {
+            (r.peak, r.mark, r.age) = (0.0, f64::INFINITY, 0);
+            self.rest_dirty |= r.asleep;
+            r.asleep = false;
+        }
+    }
+
+    /// Every part awake and every joint in play, with the state left as it
+    /// is: for when the whole state is replaced.
+    fn wake_all(&mut self) {
+        for r in &mut self.rests {
+            (r.peak, r.mark, r.age) = (0.0, f64::INFINITY, 0);
+            r.asleep = false;
+        }
+        for r in &mut self.rests {
+            r.zeroed = false;
+        }
+        self.rest_dirty = true;
+    }
+
+    /// Put to sleep the parts whose dampers have stopped them.
+    fn watch(&mut self) {
+        let k = self.k;
+        // A quarter of a second, in looks.
+        let quarter = ((0.25 / (k * WATCH as f64)) as usize).max(1);
+        for p in 0..self.rests.len() {
+            if !self.rests[p].can || self.rests[p].asleep {
+                continue;
+            }
+            let (_, start, len) = self.part_ranges[p];
+            let here = start..start + len;
+            let on_it = |w: &Wv| w.0.first().is_some_and(|s| here.contains(&s.start));
+            let busy = self.dampers.iter().any(|d| d.part == p && !d.down)
+                || self.pushes.iter().any(|x| x.on && on_it(&x.w))
+                || self
+                    .bows
+                    .iter()
+                    .any(|b| (b.pressure > 1e-7 || b.pressure_to > 0.0) && on_it(&b.w))
+                || self.exciters.iter().any(|e| {
+                    matches!(e, Exciter::Mallet { joint, mode }
+                        if self.non_parts[*joint].contains(&p) && self.q[*mode] < 0.5 * PARKED)
+                });
+            let r = &mut self.rests[p];
+            if busy {
+                (r.peak, r.mark, r.age) = (0.0, f64::INFINITY, 0);
+                continue;
+            }
+            let mut e = 0.0;
+            for i in here.clone() {
+                let v = (self.q[i] - self.q1[i]) / k;
+                e += 0.5 * self.mass[i] * v * v + 0.5 * self.stiff[i] * self.q[i] * self.q1[i];
+            }
+            r.peak = r.peak.max(e);
+            let mut sleep = e <= r.peak * QUIET || e < STILL;
+            r.age += 1;
+            if r.age >= quarter {
+                sleep |= r.strong && e > 0.1 * r.mark;
+                (r.mark, r.age) = (e, 0);
+            }
+            if sleep {
+                r.asleep = true;
+                self.rest_dirty = true;
+            }
+        }
     }
 
     /// Bring the joints' bookkeeping in line with the state as it now is.
@@ -1260,6 +1685,9 @@ impl Sim {
         if start + weights.len() > self.part_modes || !(mass > 0.0 && stiffness > 0.0) {
             return;
         }
+        if let Some(part) = self.part_at(start) {
+            self.wake(part);
+        }
         let j = &mut self.nonlinear[joint];
         let Some(seg) = j.w.0.get_mut(1) else {
             return;
@@ -1298,6 +1726,8 @@ impl Sim {
             self.damp_dirty |= !d.down;
             d.down = true;
         }
+        self.wake_all();
+        (self.e_ok, self.e1_ok) = (false, false);
         self.q.iter_mut().for_each(|x| *x = 0.0);
         self.q1.iter_mut().for_each(|x| *x = 0.0);
         for e in &self.exciters {
@@ -1350,6 +1780,10 @@ impl Sim {
         let k = self.k;
         if let Some(Seg { start, w }) = self.probes.get(exciter).and_then(|p| p.0.first()) {
             Self::listen_at(&mut self.probe, *start, w);
+            let start = *start;
+            if let Some(part) = self.part_at(start) {
+                self.wake(part);
+            }
         }
         match self.exciters.get(exciter) {
             Some(Exciter::Mallet { joint, mode }) => {
@@ -1365,6 +1799,7 @@ impl Sim {
                         self.q1[m] += strength * w / self.mass[m] * k;
                     }
                 }
+                (self.e_ok, self.e1_ok) = (false, false);
             }
             Some(Exciter::Pluck { push, time }) => {
                 let (push, time) = (*push, *time);
@@ -1380,6 +1815,10 @@ impl Sim {
                 let down = strength == 0.0;
                 self.damp_dirty |= d.down != down;
                 d.down = down;
+                let part = d.part;
+                if !down {
+                    self.wake(part);
+                }
             }
             None => {}
         }
@@ -1434,48 +1873,142 @@ impl Sim {
             self.damp_dirty |= d.down != down;
             d.down = down;
         }
+        if !down {
+            for p in 0..self.rests.len() {
+                self.wake(p);
+            }
+        }
     }
 
-    /// Bring the mode coefficients in line with which dampers are down. A
-    /// damper adds a centred viscous term to each mode it touches, which
-    /// changes how far a force moves the mode in one step, so the linear
-    /// joints are factored again and the bows placed again. Does not
+    /// Bring the simulation in line with which dampers are down and which
+    /// parts are asleep. A damper adds a centred viscous term to each mode
+    /// it touches, which changes how far a force moves the mode in one
+    /// step; a part asleep takes its joints out of play. Either way the
+    /// linear joints are factored again and the bows placed again. Does not
     /// allocate.
-    fn refresh_dampers(&mut self) {
-        self.damp_dirty = false;
-        let n = self.part_modes;
-        self.extra.iter_mut().for_each(|x| *x = 0.0);
-        for d in self.dampers.iter().filter(|d| d.down) {
-            for (e, x) in self.extra[d.x.start..].iter_mut().zip(&d.x.w) {
-                *e += x;
+    fn refresh(&mut self) {
+        if self.damp_dirty {
+            self.damp_dirty = false;
+            let n = self.part_modes;
+            self.extra.iter_mut().for_each(|x| *x = 0.0);
+            for d in self.dampers.iter().filter(|d| d.down) {
+                for (e, x) in self.extra[d.x.start..].iter_mut().zip(&d.x.w) {
+                    *e += x;
+                }
+            }
+            let k2 = self.k * self.k;
+            for i in 0..n {
+                let (a, x) = (self.lead[i], self.extra[i]);
+                if x == 0.0 {
+                    self.c1[i] = self.c1_0[i];
+                    self.c2[i] = self.c2_0[i];
+                    self.d[i] = k2 / (self.mass[i] * a);
+                } else {
+                    self.c1[i] = a * self.c1_0[i] / (a + x);
+                    self.c2[i] = (a * self.c2_0[i] - x) / (a + x);
+                    self.d[i] = k2 / (self.mass[i] * (a + x));
+                }
             }
         }
-        let k2 = self.k * self.k;
-        for i in 0..n {
-            let (a, x) = (self.lead[i], self.extra[i]);
-            if x == 0.0 {
-                self.c1[i] = self.c1_0[i];
-                self.c2[i] = self.c2_0[i];
-                self.d[i] = k2 / (self.mass[i] * a);
-            } else {
-                self.c1[i] = a * self.c1_0[i] / (a + x);
-                self.c2[i] = (a * self.c2_0[i] - x) / (a + x);
-                self.d[i] = k2 / (self.mass[i] * (a + x));
+        if self.rest_dirty {
+            self.rest_dirty = false;
+            let awake = |rests: &[Rest], ends: &[usize; 2]| {
+                !ends.iter().any(|e| rests.get(*e).is_some_and(|r| r.asleep))
+            };
+            let before = self.moving_energy();
+            for p in 0..self.rests.len() {
+                let (_, first, len) = self.part_ranges[p];
+                let here = first..first + len;
+                let r = &mut self.rests[p];
+                if r.asleep && !r.zeroed {
+                    r.zeroed = true;
+                    self.q[here.clone()].iter_mut().for_each(|x| *x = 0.0);
+                    self.q1[here.clone()].iter_mut().for_each(|x| *x = 0.0);
+                    self.qn[here].iter_mut().for_each(|x| *x = 0.0);
+                } else if !r.asleep && r.zeroed {
+                    r.zeroed = false;
+                    // It wakes where its stand-in spring left off: bent as
+                    // its host holds it, so the real joint takes over with
+                    // the same pull and no jolt.
+                    let j = &self.linear[r.joint];
+                    let (e, e1) = (j.w.dot(&self.q), j.w.dot(&self.q1));
+                    for seg in j.w.0.iter().filter(|s| s.start == first) {
+                        for (i, w) in seg.w.iter().enumerate() {
+                            let m = first + i;
+                            self.q[m] = -r.gain * e * w / self.stiff[m];
+                            self.q1[m] = -r.gain * e1 * w / self.stiff[m];
+                        }
+                    }
+                }
+            }
+            self.lin_on.clear();
+            for j in 0..self.linear.len() {
+                let live = awake(&self.rests, &self.lin_parts[j]);
+                self.lin_live[j] = live;
+                if live {
+                    self.lin_on.push(j);
+                }
+            }
+            // The stand-in is only as good as the part is still: whatever
+            // the swap would add to the energy is taken back by scaling
+            // every part down a hair, so that it never grows.
+            let n = self.part_modes;
+            let k = self.k;
+            let mallets: f64 = (n..self.q.len())
+                .map(|i| 0.5 * self.mass[i] * ((self.q[i] - self.q1[i]) / k).powi(2))
+                .sum();
+            let (had, has) = (before - mallets, self.moving_energy() - mallets);
+            if has > had && had > 0.0 {
+                let scale = (had / has).sqrt();
+                self.q[..n].iter_mut().for_each(|x| *x *= scale);
+                self.q1[..n].iter_mut().for_each(|x| *x *= scale);
+            }
+            for (j, joint) in self.nonlinear.iter_mut().enumerate() {
+                // Only a mallet's joint can touch a part that sleeps.
+                let idle = !awake(&self.rests, &self.non_parts[j]);
+                if self.non_idle[j] && !idle {
+                    joint.eta_prev = joint.w.dot(&self.q) + joint.offset;
+                }
+                if idle {
+                    joint.dv = 0.0;
+                }
+                self.non_idle[j] = idle;
+            }
+            self.ranges.clear();
+            for (r, (_, start, len)) in self.rests.iter().zip(&self.part_ranges) {
+                if r.asleep || *len == 0 {
+                    continue;
+                }
+                match self.ranges.last_mut() {
+                    Some(last) if last.1 == *start => last.1 = start + len,
+                    _ => self.ranges.push((*start, start + len)),
+                }
+            }
+            let (n, all) = (self.part_modes, self.q.len());
+            if all > n {
+                match self.ranges.last_mut() {
+                    Some(last) if last.1 == n => last.1 = all,
+                    _ => self.ranges.push((n, all)),
+                }
             }
         }
-        if !self.linear.is_empty() {
-            // A singular system keeps the old factors: more damping only
-            // makes it better conditioned, so this does not happen.
+        if !self.lin_on.is_empty() {
+            // A singular system keeps the old factors: more damping or
+            // fewer joints only make it better conditioned, so this does
+            // not happen.
             factor_linear(
                 &self.linear,
+                &self.lin_on,
                 &self.lin_kp,
                 &self.d,
                 &mut self.dense,
                 &mut self.lin_s,
                 &mut self.lin_inv,
                 &mut self.lin_m,
+                &mut self.lin_p,
             );
         }
+        (self.e_ok, self.e1_ok) = (false, false);
         for b in 0..self.bows.len() {
             self.place_bow(b);
         }
@@ -1493,6 +2026,7 @@ impl Sim {
         }
         Self::solve_linear(
             &self.linear,
+            &self.lin_on,
             &self.lin_m,
             &mut self.lin_y,
             &self.d,
@@ -1514,6 +2048,9 @@ impl Sim {
         seg.start = start;
         seg.w.clear();
         seg.w.extend_from_slice(weights);
+        if let Some(part) = self.part_at(start) {
+            self.wake(part);
+        }
         Self::listen_at(&mut self.probe, start, weights);
         self.start_push(i, pull, time);
     }
@@ -1531,6 +2068,16 @@ impl Sim {
         }
         if !(speed.is_finite() && pressure.is_finite() && pressure >= 0.0) {
             return;
+        }
+        if let Some(part) = self
+            .part_ranges
+            .iter()
+            .position(|(_, s, l)| (*s..*s + *l).contains(&start))
+        {
+            let r = &mut self.rests[part];
+            (r.peak, r.mark, r.age) = (0.0, f64::INFINITY, 0);
+            self.rest_dirty |= r.asleep;
+            r.asleep = false;
         }
         let same_part = seg.start == start && seg.w.len() == weights.len();
         let moved = !same_part || seg.w != weights;
@@ -1560,40 +2107,103 @@ impl Sim {
 
     /// x <- (I + D W K W^T)^-1 x, the implicit linear joints.
     #[inline]
-    fn solve_linear(linear: &[Joint], lin_m: &[f64], y: &mut [f64], d: &[f64], x: &mut [f64]) {
-        let n = linear.len();
+    fn solve_linear(
+        linear: &[Joint],
+        on: &[usize],
+        lin_m: &[f64],
+        y: &mut [f64],
+        d: &[f64],
+        x: &mut [f64],
+    ) {
+        let n = on.len();
         if n == 0 {
             return;
         }
-        for (y, j) in y.iter_mut().zip(linear) {
-            *y = j.w.dot(x);
+        let y = &mut y[..n];
+        for (y, j) in y.iter_mut().zip(on) {
+            *y = linear[*j].w.dot(x);
         }
-        for (i, j) in linear.iter().enumerate() {
+        for (i, j) in on.iter().enumerate() {
             let z = dot4(&lin_m[i * n..(i + 1) * n], y);
-            j.w.push(x, d, -z);
+            linear[*j].w.push(x, d, -z);
+        }
+    }
+
+    /// The linear joints' share of the step: qn <- (I + D W^T K+ W)^-1
+    /// (qn - D W^T r), with r = K- W q1 what the joints pull with because
+    /// of the previous step. With
+    /// y = W qn - P r and z = M y the answer is qn - D W^T (r + z): one
+    /// pass of dot products and one of pushes over the joints in play.
+    /// W q1 is carried over from earlier steps when `clean` steps allowed
+    /// it (nothing else moves the state after this).
+    #[inline]
+    fn solve_joints(&mut self, clean: bool) {
+        let n = self.lin_on.len();
+        if n == 0 {
+            return;
+        }
+        if !self.e1_ok {
+            for (e, j) in self.lin_e1.iter_mut().zip(&self.lin_on) {
+                *e = self.linear[*j].w.dot(&self.q1);
+            }
+        }
+        for (c, &j) in self.lin_on.iter().enumerate() {
+            self.lin_r[c] = self.lin_prev[j] * self.lin_e1[c];
+            self.lin_en[c] = self.linear[j].w.dot(&self.qn);
+        }
+        let (r, f) = (&self.lin_r[..n], &mut self.lin_f[..n]);
+        for c in 0..n {
+            self.lin_y[c] = self.lin_en[c] - dot4(&self.lin_p[c * n..(c + 1) * n], r);
+        }
+        let y = &self.lin_y[..n];
+        for (c, &j) in self.lin_on.iter().enumerate() {
+            let z = dot4(&self.lin_m[c * n..(c + 1) * n], y);
+            f[c] = z;
+            self.linear[j].w.push(&mut self.qn, &self.d, -(r[c] + z));
+        }
+        // W of the new state: y - P z. It is W q1 two steps from now.
+        std::mem::swap(&mut self.lin_e1, &mut self.lin_e);
+        self.e1_ok = self.e_ok;
+        self.e_ok = clean;
+        if clean {
+            for c in 0..n {
+                self.lin_e[c] = y[c] - dot4(&self.lin_p[c * n..(c + 1) * n], f);
+            }
         }
     }
 
     #[inline]
     fn step(&mut self) {
-        if self.damp_dirty {
-            self.refresh_dampers();
+        self.watch_in -= 1;
+        if self.watch_in == 0 {
+            self.watch_in = WATCH;
+            self.watch();
+            // The carried port differences are worked out afresh now and
+            // then, so rounding cannot build up in them.
+            (self.e_ok, self.e1_ok) = (false, false);
+        }
+        if self.damp_dirty || self.rest_dirty {
+            self.refresh();
         }
         let k = self.k;
-        for (((qn, q), q1), (c1, c2)) in self
-            .qn
-            .iter_mut()
-            .zip(&self.q)
-            .zip(&self.q1)
-            .zip(self.c1.iter().zip(&self.c2))
-        {
-            *qn = c1 * q - c2 * q1;
+        for &(from, to) in &self.ranges {
+            for (((qn, q), q1), (c1, c2)) in self.qn[from..to]
+                .iter_mut()
+                .zip(&self.q[from..to])
+                .zip(&self.q1[from..to])
+                .zip(self.c1[from..to].iter().zip(&self.c2[from..to]))
+            {
+                *qn = c1 * q - c2 * q1;
+            }
         }
 
         // Nonlinear joints: energy, its derivative, and damping.
         let mut v = 0.0;
         let mut active = false;
-        for j in &mut self.nonlinear {
+        for (j, idle) in self.nonlinear.iter_mut().zip(&self.non_idle) {
+            if *idle {
+                continue;
+            }
             let eta = j.w.dot(&self.q) + j.offset;
             let (vj, dv) = j.law.eval(eta);
             let rate = (eta - j.eta_prev) / k;
@@ -1624,14 +2234,6 @@ impl Sim {
         }
 
         if self.solver == Solver::Sav {
-            // Linear joints: the part of the implicit force that depends on
-            // the previous step.
-            for (j, kp) in self.linear.iter().zip(&self.lin_prev) {
-                let y = j.w.dot(&self.q1);
-                if y != 0.0 {
-                    j.w.push(&mut self.qn, &self.d, -kp * y);
-                }
-            }
             if active && self.v_prev == 0.0 && self.adapt {
                 // Nothing nonlinear was engaged a step ago, so psi holds only
                 // the gauge, and the gauge is free to change. Set it to the
@@ -1652,6 +2254,7 @@ impl Sim {
                     self.q.iter_mut().for_each(|x| *x *= scale);
                     self.q1.iter_mut().for_each(|x| *x *= scale);
                     self.qn.iter_mut().for_each(|x| *x *= scale);
+                    (self.e_ok, self.e1_ok) = (false, false);
                     owed -= take;
                     have -= take;
                 }
@@ -1730,6 +2333,7 @@ impl Sim {
             }
             Self::solve_linear(
                 &self.linear,
+                &self.lin_on,
                 &self.lin_m,
                 &mut self.lin_y,
                 &self.d,
@@ -1737,13 +2341,7 @@ impl Sim {
             );
             self.terms.push(usize::MAX);
         }
-        Self::solve_linear(
-            &self.linear,
-            &self.lin_m,
-            &mut self.lin_y,
-            &self.d,
-            &mut self.qn,
-        );
+        self.solve_joints(self.terms.is_empty() && self.hush_left == 0);
 
         // What is left is the linear system plus one rank-one term per bow
         // and one for the auxiliary variable: each is alpha (D a) a^T. With
@@ -1803,6 +2401,7 @@ impl Sim {
             let f = self.hush_step;
             self.q[..n].iter_mut().for_each(|x| *x *= f);
             self.q1[..n].iter_mut().for_each(|x| *x *= f);
+            (self.e_ok, self.e1_ok) = (false, false);
             self.hush_left -= 1;
             self.settle();
         }
@@ -1834,7 +2433,9 @@ impl Sim {
                 heard += self.probe.dot_diff(&self.q, &self.q1);
                 for l in &mut self.listeners {
                     for t in &mut l.taps {
-                        t.acc += t.w.dot_diff(&self.q, &self.q1);
+                        if !self.rests[t.part].asleep {
+                            t.acc += t.w.dot_diff(&self.q, &self.q1);
+                        }
                     }
                 }
             }
@@ -1874,7 +2475,8 @@ impl Sim {
             let v = (self.q[i] - self.q1[i]) / k;
             e += 0.5 * self.mass[i] * v * v + 0.5 * self.stiff[i] * self.q[i] * self.q1[i];
         }
-        for j in &self.linear {
+        for &i in &self.lin_on {
+            let j = &self.linear[i];
             if let Law::Spring { k: ks, .. } = j.law {
                 let (a, b) = (j.w.dot(&self.q), j.w.dot(&self.q1));
                 e += 0.25 * ks * (a * a + b * b);

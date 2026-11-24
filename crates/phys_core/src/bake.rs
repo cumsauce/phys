@@ -90,7 +90,131 @@ pub fn bake(part: &Part, max_hz: f64) -> Result<Bake, String> {
     })
 }
 
+/// Eigenvalues and eigenvectors of a symmetric matrix (row-major, n x n) by
+/// cyclic Jacobi rotations. Returns the values and V (row-major, the
+/// vectors in its columns), with `a` = V diag(values) V^T.
+fn eigh(mut a: Vec<f64>, n: usize) -> (Vec<f64>, Vec<f64>) {
+    let mut v = vec![0.0; n * n];
+    for i in 0..n {
+        v[i * n + i] = 1.0;
+    }
+    let scale: f64 = a.iter().map(|x| x * x).sum::<f64>().max(f64::MIN_POSITIVE);
+    for _ in 0..60 {
+        let mut off = 0.0;
+        for p in 0..n {
+            for q in p + 1..n {
+                off += a[p * n + q] * a[p * n + q];
+            }
+        }
+        if off <= 1e-28 * scale {
+            break;
+        }
+        for p in 0..n {
+            for q in p + 1..n {
+                let apq = a[p * n + q];
+                if apq == 0.0 {
+                    continue;
+                }
+                let theta = (a[q * n + q] - a[p * n + p]) / (2.0 * apq);
+                let t = theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt());
+                let c = 1.0 / (t * t + 1.0).sqrt();
+                let s = t * c;
+                for k in 0..n {
+                    let (akp, akq) = (a[k * n + p], a[k * n + q]);
+                    a[k * n + p] = c * akp - s * akq;
+                    a[k * n + q] = s * akp + c * akq;
+                }
+                for k in 0..n {
+                    let (apk, aqk) = (a[p * n + k], a[q * n + k]);
+                    a[p * n + k] = c * apk - s * aqk;
+                    a[q * n + k] = s * apk + c * aqk;
+                }
+                for k in 0..n {
+                    let (vkp, vkq) = (v[k * n + p], v[k * n + q]);
+                    v[k * n + p] = c * vkp - s * vkq;
+                    v[k * n + q] = s * vkp + c * vkq;
+                }
+            }
+        }
+    }
+    ((0..n).map(|i| a[i * n + i]).collect(), v)
+}
+
 impl Bake {
+    /// A copy that shares the shape function.
+    pub fn copy(&self) -> Bake {
+        Bake {
+            modes: self.modes.clone(),
+            shape: self.shape.clone(),
+            rot: self.rot,
+            pos: self.pos,
+        }
+    }
+
+    /// Tie points of the part to the ground with springs and solve its
+    /// modes again: each spring is the weight of every mode at its point
+    /// (from `weights`) and a stiffness, N/m. The part keeps its number of
+    /// modes; they become the modes of the part as the springs hold it,
+    /// lowest first, each with a modal mass of 1 kg. A mode's decay rate and
+    /// radiation follow from the old modes it is made of.
+    pub fn load(&mut self, springs: &[(Vec<f64>, f64)]) {
+        let n = self.modes.len();
+        if springs.is_empty() || n == 0 {
+            return;
+        }
+        // M^-1/2 K M^-1/2, K the modal stiffness plus the springs.
+        let root: Vec<f64> = self.modes.iter().map(|m| m.mass.sqrt()).collect();
+        let mut a = vec![0.0; n * n];
+        for (i, m) in self.modes.iter().enumerate() {
+            a[i * n + i] = (2.0 * std::f64::consts::PI * m.hz).powi(2);
+        }
+        for (w, k) in springs {
+            for i in 0..n {
+                for j in 0..n {
+                    a[i * n + j] += k * w[i] * w[j] / (root[i] * root[j]);
+                }
+            }
+        }
+        let (values, v) = eigh(a, n);
+        let mut order: Vec<usize> = (0..n).collect();
+        order.sort_by(|a, b| values[*a].total_cmp(&values[*b]));
+        // mix[new][old]: how much of each old mode a new one holds.
+        let mut mix = vec![0.0; n * n];
+        let mut modes = Vec::with_capacity(n);
+        for (new, &col) in order.iter().enumerate() {
+            let (mut sigma, mut rad) = (0.0, 0.0);
+            for old in 0..n {
+                let part = v[old * n + col];
+                let u = part / root[old];
+                mix[new * n + old] = u;
+                sigma += part * part * self.modes[old].sigma;
+                rad += u * self.modes[old].rad;
+            }
+            modes.push(Mode {
+                hz: values[col].max(0.0).sqrt() / (2.0 * std::f64::consts::PI),
+                sigma,
+                mass: 1.0,
+                rad,
+            });
+        }
+        let old = self.shape.clone();
+        self.shape = std::sync::Arc::new(move |at: &[f64], out: &mut Vec<V3>| {
+            let mut raw = Vec::with_capacity(n);
+            old(at, &mut raw);
+            out.clear();
+            for new in 0..n {
+                let mut phi = [0.0; 3];
+                for (u, r) in mix[new * n..(new + 1) * n].iter().zip(&raw) {
+                    for (p, r) in phi.iter_mut().zip(r) {
+                        *p += u * r;
+                    }
+                }
+                out.push(phi);
+            }
+        });
+        self.modes = modes;
+    }
+
     /// The weight of every mode for a force or a reading at `port` along the
     /// world direction `dir`.
     pub fn weights(&self, port: &Port, dir: V3) -> Vec<f64> {
