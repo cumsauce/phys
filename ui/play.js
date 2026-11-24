@@ -1,16 +1,16 @@
-// Playing: the hand (strike, pluck, bow) under the mouse, and play points
-// under the computer keyboard.
+// Playing: the hand (strike, pluck, bow) under the mouse, play points under
+// the computer keyboard and on the dock, and hearing a part after an edit.
 
-import { S, $, hooks, clone, listOf, partByName, freshName, select } from './state.js';
+import { S, $, hooks, clone, listOf, partByName, freshName, select, noteOf } from './state.js';
 import { ops, send, toast } from './net.js';
 import { hitAt, portFromHit, flash, lightCap } from './viewport.js';
 
 // ---------------------------------------------------------------- the hand's settings
 
 /** The Play panel's settings as the fields of a strike message. */
-export function mallet() {
-  if (S.hand === 'pluck') return { kind: 'pluck', pull: Number($('pull').value) / 1000 };
-  if (S.hand === 'bow') {
+export function mallet(hand = S.hand) {
+  if (hand === 'pluck') return { kind: 'pluck', pull: Number($('pull').value) / 1000 };
+  if (hand === 'bow') {
     return { kind: 'bow', speed: Number($('bowspeed').value), pressure: Math.pow(10, Number($('pressure').value)) };
   }
   return {
@@ -24,7 +24,8 @@ export function mallet() {
 export function setHand(h) {
   S.hand = h;
   for (const b of $('hand').children) b.classList.toggle('on', b.dataset.hand === h);
-  for (const box of document.querySelectorAll('#strikebox [data-for]')) box.style.display = box.dataset.for === h ? '' : 'none';
+  for (const box of document.querySelectorAll('#dock [data-for]')) box.style.display = box.dataset.for === h ? '' : 'none';
+  hooks.hint?.();
 }
 
 export function labels() {
@@ -140,6 +141,29 @@ export function playWheel(event) {
 
 export const pressing = () => press !== null;
 
+/** Play one point with the hand as it is set, from any tool. A bow cannot
+ *  be held this way, so it plucks a string and strikes anything else. */
+export function playAt(port, point) {
+  const hand = S.hand !== 'bow' ? S.hand : partByName(port.part)?.shape.kind === 'string' ? 'pluck' : 'strike';
+  send({ type: 'strike', ...port, ...mallet(hand) });
+  if (point) flash(point);
+}
+hooks.playAt = playAt;
+
+/** Where and how a part is sounded to hear what an edit did to it. */
+const AUDITION = {
+  string: { kind: 'pluck', at: [0.2], pull: 0.003 },
+  bar: { kind: 'strike', at: [0.5], speed: 2, stiffness: 1e8, mass: 0.02 },
+  plate: { kind: 'strike', at: [0.37, 0.41], speed: 2, stiffness: 1e8, mass: 0.02 },
+  membrane: { kind: 'strike', at: [0.4, 0.45], speed: 2, stiffness: 1e7, mass: 0.02 },
+};
+
+/** Sound a part once, without adding to the take. */
+export function audition(name) {
+  const how = AUDITION[partByName(name)?.shape.kind];
+  if (how) send({ type: 'audition', part: name, ...how });
+}
+
 // ---------------------------------------------------------------- play points
 
 /** A play point at `port` with the hand's current settings. */
@@ -165,7 +189,7 @@ export function bindKey(name) {
   toast(`press the key that should play ${name} (Esc to skip)`);
 }
 
-const ROWS = 'asdfghjkl;qwertyuiopzxcvbnm,./1234567890';
+const ROWS = 'asdfghjkl;qwertyuiopzxcvbnm,./';
 
 /** Give each selected part (or every string and bar) a play point and a
  *  key, left to right along a keyboard row. */
@@ -194,7 +218,7 @@ export function assignKeys() {
     }
   });
   ops(batch);
-  toast(`keys ${keys.slice(0, Math.min(parts.length, keys.length)).join(' ').toUpperCase()} now play ${parts.length} parts (in the Play tool)`);
+  toast(`keys ${keys.slice(0, Math.min(parts.length, keys.length)).join(' ').toUpperCase()} now play ${parts.length} parts`);
 }
 
 // ---------------------------------------------------------------- the keyboard
@@ -224,7 +248,7 @@ export function applyPending() {
     else if (e.key === key) { const c = clone(e); delete c.key; batch.push({ type: 'exciter', ...c }); }
   }
   ops(batch);
-  toast(`${key.toUpperCase()} plays ${name} (in the Play tool)`);
+  toast(`${key.toUpperCase()} plays ${name}`);
 }
 
 /** Returns true when the key was used for playing. */
@@ -242,7 +266,7 @@ export function keyDown(event) {
     return true;
   }
   if (event.code === 'Space') { hush(); return true; }
-  if (S.tool !== 'strike' || !ch) return false;
+  if (!ch) return false;
   const targets = listOf('exciter').filter((e) => e.key === ch);
   if (!targets.length) return false;
   if (event.repeat) return true;
@@ -262,3 +286,47 @@ export function keyUp(event) {
   held.delete(event.code);
   for (const name of bows) send({ type: 'excite', exciter: name, strength: 0 });
 }
+
+// ---------------------------------------------------------------- the keys on the dock
+
+/** The play points that have a key, as caps that can be pressed with the mouse. */
+export function renderKeys() {
+  const box = $('keys');
+  box.replaceChildren();
+  const order = (e) => { const i = ROWS.indexOf(e.key); return i < 0 ? 99 : i; };
+  const bound = listOf('exciter').filter((e) => e.key).sort((a, b) => order(a) - order(b));
+  if (!bound.length) {
+    const none = document.createElement('span');
+    none.className = 'none';
+    none.textContent = 'No keys yet';
+    box.append(none);
+    return;
+  }
+  for (const e of bound) {
+    const cap = document.createElement('button');
+    cap.dataset.exciter = e.name;
+    cap.title = `${e.name}: ${e.kind} on ${e.on.part}`;
+    const part = partByName(e.on.part);
+    const info = S.doc.parts[S.doc.scene.parts.indexOf(part)];
+    const note = part && part.shape.kind !== 'plate' && part.shape.kind !== 'mass' ? noteOf(part.shape.f0 ?? info?.hz[0] / (part.tune ?? 1)) : null;
+    const small = document.createElement('small');
+    small.textContent = note?.name ?? e.on.part.slice(0, 5);
+    cap.append(e.key.toUpperCase(), small);
+    cap.addEventListener('pointerdown', (ev) => {
+      send({ type: 'excite', exciter: e.name, scale: ev.shiftKey ? 1.6 : ev.altKey ? 0.5 : 1 });
+      lightCap(e.name);
+      if (e.kind === 'bow') {
+        window.addEventListener('pointerup', () => send({ type: 'excite', exciter: e.name, strength: 0 }), { once: true });
+      }
+    });
+    box.append(cap);
+  }
+}
+
+hooks.keyLit = (name) => {
+  for (const cap of $('keys').children) {
+    if (cap.dataset?.exciter !== name) continue;
+    cap.classList.add('lit');
+    setTimeout(() => cap.classList.remove('lit'), 160);
+  }
+};

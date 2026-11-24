@@ -1,10 +1,11 @@
-// Direct manipulation: resize handles on the selected part, and dragging
-// attachments (joint ends, pickups, play points) along and between parts.
+// Direct manipulation: resize handles on the selected part, dragging the
+// selected parts over the ground, and dragging attachments (joint ends,
+// pickups, play points) along and between parts.
 
 import { S, hooks, round, clone, findItem, partByName } from './state.js';
 import { ops, toast } from './net.js';
 import {
-  THREE, overlay, hitObjects, hitAt, portFromHit, portWorld, mouseRay, partGroup, tip, clearGroup, applySelection,
+  THREE, overlay, hitObjects, hitAt, portFromHit, portWorld, mouseRay, partGroup, tip, clearGroup, applySelection, selectedGroups,
 } from './viewport.js';
 
 // ---------------------------------------------------------------- snapping points on a part
@@ -63,7 +64,7 @@ function handleSpecs(shape) {
 
 function showHandles() {
   clearGroup(handles);
-  if (S.tool !== 'select' || S.placing || S.sel.length !== 1 || S.sel[0].kind !== 'part') return;
+  if (S.tool !== 'select' || S.sel.length !== 1 || S.sel[0].kind !== 'part') return;
   const part = partByName(S.sel[0].name);
   const group = partGroup(S.sel[0].name);
   if (!part || !group) return;
@@ -146,6 +147,46 @@ function resizeUp() {
   ops([{ type: 'part', ...part }]);
 }
 
+// ---------------------------------------------------------------- dragging parts over the ground
+
+/** Start sliding the selected parts level with the ground, from a press
+ *  that landed on one of them. */
+export function moveDragStart(hit) {
+  const groups = selectedGroups();
+  if (!groups.length) return false;
+  clearGroup(handles);
+  drag = {
+    kind: 'move',
+    plane: new THREE.Plane(new THREE.Vector3(0, 1, 0), -hit.point.y),
+    from: hit.point.clone(),
+    groups: groups.map((g) => [g, g.position.clone()]),
+    delta: new THREE.Vector3(),
+  };
+  return true;
+}
+
+function moveMove(event) {
+  const d = drag;
+  const p = new THREE.Vector3();
+  if (!mouseRay(event).intersectPlane(d.plane, p)) return;
+  d.delta.copy(p).sub(d.from).setY(0).clampLength(0, 5);
+  if (!S.alt) { d.delta.x = Math.round(d.delta.x * 100) / 100; d.delta.z = Math.round(d.delta.z * 100) / 100; }
+  for (const [g, start] of d.groups) g.position.copy(start).add(d.delta);
+  tip(`${(d.delta.x * 1000).toFixed(0)}, ${(d.delta.z * 1000).toFixed(0)} mm`, event.clientX, event.clientY);
+}
+
+function moveUp() {
+  const d = drag;
+  tip('');
+  if (d.delta.lengthSq() < 1e-12) return showHandles();
+  const batch = [];
+  for (const [g] of d.groups) {
+    const part = partByName(g.name.slice(5));
+    if (part) batch.push({ type: 'part', ...clone(part), pos: g.position.toArray().map((x) => round(x, 1e4)) });
+  }
+  ops(batch);
+}
+
 // ---------------------------------------------------------------- dragging attachments
 
 /** Start dragging the attachment a marker stands for. */
@@ -198,6 +239,7 @@ export const dragging = () => drag !== null;
 
 export function dragMove(event) {
   if (drag?.kind === 'resize') resizeMove(event);
+  else if (drag?.kind === 'move') moveMove(event);
   else if (drag?.kind === 'port') portMove(event);
 }
 
@@ -205,6 +247,7 @@ export function dragUp() {
   const d = drag;
   if (!d) return;
   if (d.kind === 'resize') resizeUp();
+  else if (d.kind === 'move') moveUp();
   else portUp();
   drag = null;
 }

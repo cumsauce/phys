@@ -1,54 +1,10 @@
-// Making things: adding, placing, duplicating, repeating, renaming and
-// deleting, and the right-click menu.
+// Changing what is there: duplicating, repeating, renaming and deleting,
+// and the right-click menu. (draw.js makes new things.)
 
-import { S, $, hooks, round, clone, listOf, findItem, partByName, freshName, select } from './state.js';
+import { S, $, hooks, DRAW, round, clone, listOf, findItem, partByName, freshName, select } from './state.js';
 import { ops, toast } from './net.js';
-import { THREE, hitAt, portFromHit, groundAt, portWorld, worldToPort, attachments, applySelection } from './viewport.js';
-
-const TEMPLATES = {
-  plate: { shape: { kind: 'plate', size: [0.4, 0.3], thickness: 0.003 }, material: 'wood' },
-  bar: { shape: { kind: 'bar', length: 0.3, width: 0.04, thickness: 0.012 }, material: 'aluminium' },
-  string: { shape: { kind: 'string', length: 0.65, radius: 0.0004, f0: 196 }, material: 'steel' },
-  membrane: { shape: { kind: 'membrane', radius: 0.15, f0: 120 }, material: 'mylar' },
-  mass: { shape: { kind: 'mass', mass: 0.01 } },
-};
-
-// ---------------------------------------------------------------- adding by clicking
-
-export function startPlacing(what) {
-  S.placing = what;
-  $('view').classList.add('placing');
-  applySelection();   // the gizmo steps aside while placing
-  toast(`click where the ${what === 'mic' ? 'microphone' : what} should go (Esc to cancel)`);
-}
-
-export function stopPlacing() {
-  const was = S.placing;
-  S.placing = null;
-  $('view').classList.remove('placing');
-  if (was) applySelection();
-}
-
-/** Put the thing being placed where the click landed: just above a part, or on the ground. */
-export function placeAt(event) {
-  const what = S.placing;
-  const hit = hitAt(event, 'part');
-  const point = hit ? hit.point.clone() : groundAt(event);
-  if (!point) return toast('click on the ground or on a part', true);
-  const lift = what === 'mic' ? 0.25 : hit ? 0.02 : 0.05;
-  point.y += lift;
-  const pos = point.toArray().map((x) => round(x, 100));
-  stopPlacing();
-  if (what === 'mic') {
-    const name = freshName('mic', listOf('listener'));
-    select([{ kind: 'listener', name }]);
-    return ops([{ type: 'listener', name, kind: 'mic', pos }]);
-  }
-  const name = freshName(what, listOf('part'));
-  select([{ kind: 'part', name }]);
-  ops([{ type: 'part', name, pos, ...clone(TEMPLATES[what]) }]);
-  toast('');
-}
+import { THREE, hitAt, portFromHit, portWorld, worldToPort, attachments } from './viewport.js';
+import { placeDefault } from './draw.js';
 
 // ---------------------------------------------------------------- copies
 
@@ -206,6 +162,7 @@ export function contextMenu(event) {
     title.textContent = S.sel.length > 1 ? `${S.sel.length} selected` : pick.name;
     menu.append(title);
     if (port) {
+      add('Play here', () => hooks.playAt?.(port, hit.point));
       add('Add play point here', () => hooks.addPlayPoint?.(port));
       add('Put a pickup here', () => {
         const name = freshName('pickup', listOf('listener'));
@@ -218,6 +175,7 @@ export function contextMenu(event) {
         toast('now click the second point (empty space ties it to the ground)');
       });
     }
+    if (port) menu.append(document.createElement('hr'));
     add('Duplicate', duplicate);
     if (S.sel.length === 1) {
       add('Rename…', () => {
@@ -230,9 +188,7 @@ export function contextMenu(event) {
     }
     add('Delete', remove, 'danger');
   } else {
-    for (const what of ['plate', 'bar', 'string', 'membrane', 'mass', 'mic']) {
-      add(`Add ${what === 'mic' ? 'microphone' : what} here`, () => { S.placing = what; placeAt(event); });
-    }
+    for (const what of DRAW) add(`Add ${what === 'mic' ? 'microphone' : what} here`, () => placeDefault(what, event));
   }
   const rect = $('view').getBoundingClientRect();
   menu.style.display = 'block';

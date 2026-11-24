@@ -1,22 +1,19 @@
 // The connection to the backend.
 
-import { $ } from './state.js';
+import { S, $ } from './state.js';
 
 let ws = null;
 
-let toastAt = 0;
+let toastTimer = null;
 
+/** A short message over the view; it fades by itself. */
 export function toast(message, error = false) {
   const t = $('toast');
+  clearTimeout(toastTimer);
+  if (!message) { t.className = ''; return; }
   t.textContent = message;
-  t.className = error ? 'error' : '';
-  toastAt = performance.now();
-}
-
-/** Clear the status line, unless it was written a moment ago: an edit's
- *  own message should outlive the scene update that edit causes. */
-export function settle() {
-  if (performance.now() - toastAt > 2500) toast('');
+  t.className = error ? 'show error' : 'show';
+  toastTimer = setTimeout(() => { t.className = ''; }, error ? 6000 : 3500);
 }
 
 export function send(msg) {
@@ -25,7 +22,11 @@ export function send(msg) {
 }
 
 /** One batch of ops: one undo step. */
-export const ops = (list) => { if (list.length) send({ type: 'ops', ops: list }); };
+export const ops = (list) => {
+  if (!list.length) return;
+  S.sentAt = performance.now();
+  send({ type: 'ops', ops: list });
+};
 
 /** Connect, and keep reconnecting. `handlers` maps a message type to a function. */
 export function connect(handlers) {

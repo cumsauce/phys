@@ -3,16 +3,30 @@
 export const S = {
   doc: null,        // the last "scene" message from the backend
   sel: [],          // selected items: [{kind: 'part' | 'joint' | 'exciter' | 'listener', name}]
-  tool: 'select',   // select | strike (the Play tool) | joint | pickup
-  hand: 'strike',   // how the Play tool excites: strike | pluck | bow
+  tool: 'select',   // select | play | one of DRAW | joint | pickup
+  back: 'select',   // the tool Tab returns to from Play
+  hand: 'strike',   // how the hand excites: strike | pluck | bow
   amps: [],         // latest mode amplitudes, in display order
-  placing: null,    // what Add is waiting to place with a click
-  jointFrom: null,  // first port of a joint being drawn
+  jointFrom: null,  // first port of a joint being made by two clicks
   capture: null,    // the play point waiting for a key to be bound to it
   midi: [],         // connected MIDI inputs
   learn: null,      // the play point waiting for a MIDI note
   alt: false,       // Alt held: no snapping
+  sentAt: 0,        // when this page last sent an edit
 };
+
+/** The tools that make something where you draw it. */
+export const DRAW = ['string', 'bar', 'plate', 'membrane', 'mass', 'mic'];
+export const isDraw = (tool) => DRAW.includes(tool);
+
+/** Choices that outlive the page. */
+export const prefs = { vibes: true, notes: true, hear: true, autotie: true };
+try { Object.assign(prefs, JSON.parse(localStorage.getItem('phys.prefs') || '{}')); } catch { /* no storage */ }
+export function setPref(key, value) {
+  prefs[key] = value;
+  try { localStorage.setItem('phys.prefs', JSON.stringify(prefs)); } catch { /* no storage */ }
+  hooks.prefs?.(key);
+}
 
 /** Functions modules offer each other without importing in circles. */
 export const hooks = {};

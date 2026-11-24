@@ -12,94 +12,88 @@
 <body>
   <header>
     <span class="brand">phys</span>
-    <div class="group" id="tools">
-      <button data-tool="select" title="Select and move (S)">Select</button>
-      <button data-tool="strike" title="Strike, pluck or bow a part by hand (H)">Play</button>
-      <button data-tool="joint" title="Click two points to tie them with a spring; click empty space second to tie to the ground (J)">Joint</button>
-      <button data-tool="pickup" title="Click a part to stick a contact pickup on it (P)">Pickup</button>
-    </div>
+    <button id="filebtn" class="quiet" title="New, open and save"><span id="file">untitled</span> <small>▾</small></button>
     <div class="group">
-      <select id="add" title="Add something: choose it, then click where it should go">
-        <option value="">Add…</option>
-        <option value="plate">Plate</option>
-        <option value="bar">Bar</option>
-        <option value="string">String</option>
-        <option value="membrane">Membrane</option>
-        <option value="mass">Mass</option>
-        <option value="mic">Microphone</option>
-      </select>
+      <button id="undo" class="icon" title="Undo (Cmd/Ctrl+Z)">↶</button>
+      <button id="redo" class="icon" title="Redo (Shift+Cmd/Ctrl+Z)">↷</button>
     </div>
-    <div class="group" id="gizmo">
-      <button data-mode="translate" title="Move (W)">Move</button>
-      <button data-mode="rotate" title="Rotate (E)">Rotate</button>
-    </div>
-    <div class="group">
-      <button id="undo" title="Undo (Cmd/Ctrl+Z)">Undo</button>
-      <button id="redo" title="Redo (Shift+Cmd/Ctrl+Z)">Redo</button>
-    </div>
-    <div class="group">
-      <button id="new" title="Start again from the default scene (Cmd/Ctrl+N in the app)">New</button>
-      <button id="open" title="Open a scene file (Cmd/Ctrl+O in the app)">Open…</button>
-      <button id="save" title="Save the scene (Cmd/Ctrl+S)">Save</button>
-      <button id="saveas" title="Save the scene under a new name">Save As…</button>
-    </div>
-    <div class="group">
-      <button id="render" title="Replay the strikes you made, offline, into a WAV">Render take</button>
-      <button id="clear" title="Forget the recorded strikes">Clear take</button>
+    <button id="viewbtn" class="quiet" title="What the view shows, and whether edits are heard">View <small>▾</small></button>
+    <div class="spacer"></div>
+    <div id="tuner" class="dim" title="The pitch of the part you last played">
+      <b id="tuner_note">—</b>
+      <span class="needle"><i id="tuner_needle"></i></span>
+      <span id="tuner_hz"></span>
     </div>
     <div class="spacer"></div>
-    <label class="inline"><input type="checkbox" id="vibes" checked> Show vibration</label>
-    <label class="inline">Volume <input type="range" id="volume" min="0" max="2" step="0.01" value="1"></label>
+    <div class="group" id="takebox" title="Everything you play is remembered as a take">
+      <button id="render" title="Replay the take offline into a WAV file">Render take</button>
+      <button id="clear" class="icon" title="Forget the take">✕</button>
+    </div>
+    <span class="meter" title="Output level"><i id="level"></i></span>
+    <input type="range" id="volume" min="0" max="2" step="0.01" value="1" title="Volume">
   </header>
 
   <main>
-    <div id="view"><div id="labels"></div><div id="tip"></div><div id="menu"></div></div>
-    <aside>
-      <section id="strikebox">
-        <h2>Play by hand</h2>
-        <div class="group" id="hand">
-          <button data-hand="strike" title="A mallet thrown at the point you click">Strike</button>
-          <button data-hand="pluck" title="Pull the point aside and let go">Pluck</button>
-          <button data-hand="bow" title="Hold the mouse down on a part to bow it there">Bow</button>
+    <nav id="rail"></nav>
+
+    <div id="view">
+      <div id="labels"></div>
+      <div id="hint"></div>
+      <div id="gizmo" class="float group">
+        <button data-mode="translate" title="Move the selection (` switches)">Move</button>
+        <button data-mode="rotate" title="Rotate the selection (` switches)">Rotate</button>
+      </div>
+      <div id="viewbtns" class="float group">
+        <button data-view="fit" title="Fit the selection, or everything, in view (\ or Home)">Fit</button>
+        <button data-view="front" title="Look from the front">Front</button>
+        <button data-view="side" title="Look from the side">Side</button>
+        <button data-view="top" title="Look from above">Top</button>
+      </div>
+      <div id="toast"></div>
+      <div id="tip"></div>
+      <div id="menu"></div>
+
+      <div id="dock">
+        <div class="hand">
+          <div class="group" id="hand">
+            <button data-hand="strike" title="A mallet thrown at the point">Strike</button>
+            <button data-hand="pluck" title="Pull the point aside and let go">Pluck</button>
+            <button data-hand="bow" title="Hold the mouse down on a part to bow it there">Bow</button>
+          </div>
+          <div class="knobs" data-for="strike">
+            <label title="How fast the mallet arrives">Speed <input type="range" id="speed" min="0.2" max="8" step="0.1" value="2"><output id="speed_out"></output></label>
+            <label title="What the mallet's head is made of">Head <input type="range" id="hard" min="5" max="10" step="0.1" value="8"><output id="hard_out"></output></label>
+            <label title="The mallet's mass">Mass <input type="range" id="mass" min="-3" max="-0.3" step="0.05" value="-1.7"><output id="mass_out"></output></label>
+          </div>
+          <div class="knobs" data-for="pluck">
+            <label title="How far the point is pulled aside">Pull <input type="range" id="pull" min="0.5" max="12" step="0.1" value="3"><output id="pull_out"></output></label>
+          </div>
+          <div class="knobs" data-for="bow">
+            <label title="How fast the bow travels">Speed <input type="range" id="bowspeed" min="0.02" max="1" step="0.01" value="0.2"><output id="bowspeed_out"></output></label>
+            <label title="How hard the bow presses (scroll while bowing)">Press <input type="range" id="pressure" min="-1.7" max="0.5" step="0.02" value="-0.5"><output id="pressure_out"></output></label>
+          </div>
         </div>
-        <div data-for="strike">
-          <label>Speed <output id="speed_out"></output><input type="range" id="speed" min="0.2" max="8" step="0.1" value="2"></label>
-          <label>Hardness <output id="hard_out"></output><input type="range" id="hard" min="5" max="10" step="0.1" value="8"></label>
-          <label>Mass <output id="mass_out"></output><input type="range" id="mass" min="-3" max="-0.3" step="0.05" value="-1.7"></label>
-          <div class="note">Click to strike at this speed, or flick: press, sweep and release, and the sweep's speed sets how hard.</div>
-        </div>
-        <div data-for="pluck">
-          <label>Pull <output id="pull_out"></output><input type="range" id="pull" min="0.5" max="12" step="0.1" value="3"></label>
-          <div class="note">Click a point to pluck it, or drag across strings to strum.</div>
-        </div>
-        <div data-for="bow">
-          <label>Bow speed <output id="bowspeed_out"></output><input type="range" id="bowspeed" min="0.02" max="1" step="0.01" value="0.2"></label>
-          <label>Pressure <output id="pressure_out"></output><input type="range" id="pressure" min="-1.7" max="0.5" step="0.02" value="-0.5"></label>
-          <div class="note">Hold the mouse down on a part to bow it; slide to move the bow, scroll to press harder, let go to lift. Near one end of a string works best.</div>
-        </div>
-        <h2>Keys</h2>
-        <div class="row">
-          <button id="assign" title="Give each selected part (or every string and bar) a play point and a key, left to right">Assign keys</button>
+        <div class="keys">
+          <div id="keys"></div>
+          <button id="assign" title="Give each selected part (or every string and bar) a key, left to right">Assign keys</button>
           <button id="hush" title="Stop all sound (Space)">Hush</button>
         </div>
-        <div class="note">A play point is a spot bound to a key or a MIDI note. Right-click a spot to add one. Shift plays harder, Alt softer. Right-drag turns the view while this tool is on.</div>
-      </section>
-      <section id="inspector"></section>
-    </aside>
+      </div>
+    </div>
+
+    <aside id="inspector"></aside>
   </main>
 
   <footer>
     <span id="conn" class="bad">connecting…</span>
-    <span id="file"></span>
+    <span id="path"></span>
     <span id="stats"></span>
-    <span class="meter" title="Output level"><i id="level"></i></span>
     <span id="load"></span>
-    <span id="tuner" class="dim" title="The pitch of the part you last played">♪ —</span>
-    <span id="midi" class="dim"></span>
     <span class="spacer"></span>
-    <span id="toast"></span>
+    <span id="midi" class="dim"></span>
   </footer>
 
+  <div id="pop"></div>
   <script type="module" src="app.js"></script>
 </body>
 </html>

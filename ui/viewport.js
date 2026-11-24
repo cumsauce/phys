@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from './vendor/OrbitControls.js';
 import { TransformControls } from './vendor/TransformControls.js';
-import { S, $, hooks, COLORS, deg, rad, round, findItem, partByName, isSelected, listOf } from './state.js';
+import { S, $, hooks, prefs, COLORS, deg, rad, round, findItem, partByName, isSelected, listOf, noteOf } from './state.js';
 import { ops } from './net.js';
 
 export { THREE };
@@ -17,7 +17,7 @@ view.prepend(renderer.domElement);
 export const canvas = renderer.domElement;
 
 export const scene3 = new THREE.Scene();
-scene3.background = new THREE.Color(0x16181c);
+scene3.background = new THREE.Color(0x14161a);
 export const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
 camera.position.set(0.55, 0.5, 0.75);
 
@@ -38,7 +38,7 @@ export const overlay = new THREE.Group();   // handles, flashes, drag previews
 scene3.add(overlay);
 
 export const gizmo = new TransformControls(camera, canvas);
-gizmo.setSize(0.8);
+gizmo.setSize(0.6);
 scene3.add(gizmo.getHelper());
 /** True from the moment the gizmo is dragged until the next pointer press. */
 export const gizmoState = { used: false };
@@ -167,7 +167,15 @@ function coil(a, b, spring) {
   return pts;
 }
 
-const labels = [];   // key caps: {el, object, exciter}
+const labels = [];   // key caps {el, object, exciter} and note tags {el, at, tag}
+
+function label(cls, text, rest) {
+  const el = document.createElement('div');
+  el.className = cls;
+  el.textContent = text;
+  $('labels').append(el);
+  labels.push({ el, ...rest });
+}
 
 export function buildWorld() {
   gizmo.detach();
@@ -220,6 +228,18 @@ export function buildWorld() {
   });
   world.updateMatrixWorld(true);
 
+  // The note each pitched part is meant to sound, at its near end.
+  if (prefs.notes) {
+    doc.scene.parts.forEach((part, i) => {
+      const sh = part.shape;
+      if (!['string', 'bar', 'membrane'].includes(sh.kind)) return;
+      const note = noteOf(sh.f0 ?? doc.parts[i].hz[0] / (part.tune ?? 1));
+      if (!note) return;
+      const local = new THREE.Vector3(sh.kind === 'membrane' ? 0 : -sh.length / 2, 0, 0);
+      label('tag', note.name, { at: partGroup(part.name).localToWorld(local), tag: true });
+    });
+  }
+
   const dot = new THREE.SphereGeometry(0.0045, 12, 8);
   for (const j of doc.scene.joints) {
     const a = portWorld(j.a);
@@ -243,13 +263,7 @@ export function buildWorld() {
     const cone = marker(new THREE.ConeGeometry(0.007, 0.024, 12), 0xd06ad8, { kind: 'exciter', name: e.name, end: 'on' }, p.clone().addScaledVector(n, 0.015));
     cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), n.clone().negate());   // tip toward the surface
     cone.userData.anchor = n.clone().multiplyScalar(0.015);
-    if (e.key) {
-      const el = document.createElement('div');
-      el.className = 'cap';
-      el.textContent = e.key.toUpperCase();
-      $('labels').append(el);
-      labels.push({ el, object: cone, exciter: e.name });
-    }
+    if (e.key) label('cap', e.key.toUpperCase(), { object: cone, exciter: e.name });
   }
 
   for (const l of doc.scene.listeners) {
@@ -265,6 +279,7 @@ export function buildWorld() {
 
 /** Light the key cap of a play point for a moment. */
 export function lightCap(exciter, on = true) {
+  hooks.keyLit?.(exciter);
   for (const l of labels) {
     if (l.exciter !== exciter) continue;
     l.el.classList.toggle('lit', on);
@@ -274,7 +289,7 @@ export function lightCap(exciter, on = true) {
 
 // ---------------------------------------------------------------- selection and the gizmo
 
-function selectedGroups() {
+export function selectedGroups() {
   return S.sel.filter((s) => s.kind === 'part').map((s) => partGroup(s.name)).filter(Boolean);
 }
 
@@ -290,7 +305,7 @@ export function applySelection() {
     else o.material.color.setHex(on ? SELECTED : o.userData.color);
   });
   gizmo.detach();
-  if (S.tool === 'select' && !S.placing) {
+  if (S.tool === 'select') {
     const groups = selectedGroups();
     const mic = S.sel.length === 1 && S.sel[0].kind === 'listener' ? world.getObjectByName('mic:' + S.sel[0].name) : null;
     if (groups.length) gizmo.attach(groups[0]);
@@ -432,7 +447,7 @@ let scalePeak = 1e-9;
 const phases = [];
 
 function vibrate(dt) {
-  const show = $('vibes').checked;
+  const show = prefs.vibes;
   const amps = S.amps;
   let top = 0;
   for (const a of amps) top = Math.max(top, Math.abs(a));
@@ -475,12 +490,19 @@ function vibrate(dt) {
 const projected = new THREE.Vector3();
 function placeLabels() {
   const w = canvas.clientWidth, h = canvas.clientHeight;
+  const placed = [];
   for (const l of labels) {
-    projected.copy(l.object.position).project(camera);
-    const behind = projected.z > 1;
-    l.el.style.display = behind ? 'none' : '';
-    l.el.style.left = `${(projected.x + 1) / 2 * w}px`;
-    l.el.style.top = `${(1 - projected.y) / 2 * h - 16}px`;
+    projected.copy(l.at ?? l.object.position).project(camera);
+    const x = (projected.x + 1) / 2 * w, y = (1 - projected.y) / 2 * h - (l.tag ? 4 : 16);
+    let show = projected.z <= 1;
+    // Note tags that would sit on top of one another: the first one wins.
+    if (show && l.tag) {
+      if (placed.some((p) => Math.abs(p[0] - x) < 30 && Math.abs(p[1] - y) < 14)) show = false;
+      else placed.push([x, y]);
+    }
+    l.el.style.display = show ? '' : 'none';
+    l.el.style.left = `${x}px`;
+    l.el.style.top = `${y}px`;
   }
 }
 

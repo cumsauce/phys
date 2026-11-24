@@ -175,6 +175,8 @@ enum ClientMsg {
     Undo,
     Redo,
     Strike(Strike),
+    /// The same, but only to hear an edit: it does not join the take.
+    Audition(Strike),
     Excite {
         exciter: String,
         /// Left out: the exciter's own default.
@@ -392,6 +394,12 @@ impl App {
     }
 
     pub(crate) fn strike(&mut self, s: Strike) -> Result<(), String> {
+        self.strike_with(s, true)
+    }
+
+    /// Excite a part with the roaming hand. `record` adds it to the take;
+    /// without it the sound is only an audition of an edit.
+    fn strike_with(&mut self, s: Strike, record: bool) -> Result<(), String> {
         let scene = self.doc.scene();
         let part = scene
             .parts
@@ -435,6 +443,9 @@ impl App {
                 pressure: s.pressure,
             },
         });
+        if !record {
+            return Ok(());
+        }
         let now = self
             .take_start
             .get_or_insert_with(Instant::now)
@@ -1007,6 +1018,7 @@ impl App {
             ClientMsg::Undo => self.undo().map(|_| None),
             ClientMsg::Redo => self.redo().map(|_| None),
             ClientMsg::Strike(s) => self.strike_live(s).map(|_| None),
+            ClientMsg::Audition(s) => self.strike_with(s, false).map(|_| None),
             ClientMsg::Excite {
                 exciter,
                 strength,
@@ -1221,6 +1233,11 @@ const FILES: &[(&str, &str, &str)] = &[
         "build.js",
         "text/javascript",
         include_str!("../../../ui/build.js"),
+    ),
+    (
+        "draw.js",
+        "text/javascript",
+        include_str!("../../../ui/draw.js"),
     ),
     (
         "play.js",
