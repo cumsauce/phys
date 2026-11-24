@@ -260,6 +260,13 @@ export function buildWorld() {
   for (const e of doc.scene.exciters) {
     const p = portWorld(e.on);
     const n = e.dir ? new THREE.Vector3().fromArray(e.dir).normalize() : partNormal(e.on.part);
+    if (e.kind === 'damper') {
+      // A felt block under the part, clear of a hammer at the same point.
+      const felt = marker(new THREE.BoxGeometry(0.014, 0.006, 0.006), 0x9aa0a8, { kind: 'exciter', name: e.name, end: 'on' }, p.clone().addScaledVector(n, -0.006));
+      felt.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), n);
+      felt.userData.anchor = n.clone().multiplyScalar(-0.006);
+      continue;
+    }
     const cone = marker(new THREE.ConeGeometry(0.007, 0.024, 12), 0xd06ad8, { kind: 'exciter', name: e.name, end: 'on' }, p.clone().addScaledVector(n, 0.015));
     cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), n.clone().negate());   // tip toward the surface
     cone.userData.anchor = n.clone().multiplyScalar(0.015);

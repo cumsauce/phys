@@ -391,3 +391,100 @@ fn a_hush_silences_everything_within_fifty_milliseconds() {
     sim.process(&mut buf);
     assert!(buf.iter().any(|x| x.abs() > before * 0.1));
 }
+
+/// A hammer and a damper on one string, as under a piano key.
+const KEYED: &str = r#"[
+  {"name": "hammer", "kind": "mallet", "on": {"part": "s", "at": [0.12]}, "mass": 0.005, "stiffness": 2e7},
+  {"name": "felt", "kind": "damper", "on": {"part": "s", "at": [0.12]}}
+]"#;
+
+#[test]
+fn a_damper_lets_a_note_ring_while_it_is_lifted_and_stops_it_when_it_falls() {
+    let keyed = FINGERED.replace("[EXCITER]", KEYED);
+    let sr = SR as usize;
+    // Key down at 0, up at 1 s.
+    let x = mono(
+        &keyed.replace(
+            "SCORE",
+            r#"[{"t": 0.0, "exciter": "felt"}, {"t": 0.0, "exciter": "hammer", "strength": 2},
+                {"t": 1.0, "exciter": "felt", "strength": 0}]"#,
+        ),
+        2.0,
+    );
+    let (held, after) = (rms(&x[sr / 2..sr]), rms(&x[sr * 3 / 2..]));
+    assert!(
+        after < held * 0.01,
+        "held {held}, half a second after the damper fell {after}"
+    );
+    // Held for the whole render, it is still ringing at the end.
+    let x = mono(
+        &keyed.replace(
+            "SCORE",
+            r#"[{"t": 0.0, "exciter": "felt"}, {"t": 0.0, "exciter": "hammer", "strength": 2}]"#,
+        ),
+        2.0,
+    );
+    let late = rms(&x[sr * 3 / 2..]);
+    assert!(
+        late > after * 20.0,
+        "at 1.5 s: {late} with the key held, {after} with it let go"
+    );
+    // Struck with the damper left down, the string only thuds.
+    let x = mono(
+        &keyed.replace(
+            "SCORE",
+            r#"[{"t": 0.0, "exciter": "hammer", "strength": 2}]"#,
+        ),
+        2.0,
+    );
+    let thud = rms(&x[sr / 2..sr]);
+    assert!(thud < held * 0.01, "held {held}, damped {thud}");
+}
+
+#[test]
+fn a_falling_damper_never_adds_energy_to_a_string_tied_to_a_plate() {
+    let s = scene(
+        r#"{
+      "parts": [
+        {"name": "top", "shape": {"kind": "plate", "size": [0.4, 0.3], "thickness": 0.003}, "material": "wood"},
+        {"name": "s", "shape": {"kind": "string", "length": 0.65, "f0": 196}}
+      ],
+      "joints": [
+        {"name": "bridge", "kind": "spring", "a": {"part": "s", "at": [0.95]}, "b": {"part": "top", "at": [0.7, 0.45]}, "stiffness": 2e4}
+      ],
+      "exciters": [
+        {"name": "hit", "kind": "impulse", "on": {"part": "s", "at": [0.2]}},
+        {"name": "felt", "kind": "damper", "on": {"part": "s", "at": [0.15]}, "damping": 3}
+      ],
+      "listeners": [{"name": "mic", "kind": "mic", "pos": [0.1, 0.4, 0.3]}]
+    }"#,
+    );
+    let mut sim = Sim::compile(&s, f64::from(SR)).expect("compiles");
+    let (hit, felt) = (
+        sim.exciter("hit").expect("hit"),
+        sim.exciter("felt").expect("felt"),
+    );
+    let mut buf = vec![0.0f32; 2 * 64];
+    sim.excite(felt, 1.0);
+    sim.excite(hit, 0.01);
+    sim.process(&mut buf);
+    let start = sim.energy();
+    let mut last = start;
+    for block in 0..400 {
+        // The damper falls, lifts and falls again while the string rings.
+        if block == 100 || block == 140 {
+            sim.excite(felt, 0.0);
+        }
+        if block == 120 {
+            sim.excite(felt, 1.0);
+        }
+        sim.process(&mut buf);
+        let e = sim.energy();
+        assert!(
+            e <= last * (1.0 + 1e-9),
+            "block {block}: energy rose from {last} to {e}"
+        );
+        last = e;
+    }
+    assert!(last < start * 1e-3, "energy {start} only fell to {last}");
+}

@@ -2,7 +2,7 @@
 
 Build a sounding object out of connected parts, excite it, and hear it.
 
-A scene is a JSON document of parts (string, bar, plate, membrane, point mass), joints (springs, rattling springs, contacts), exciters (mallets, impulses, plucks, bows) and listeners (microphones, contact pickups). Each part is baked into a table of vibration modes; the simulation couples those modes through the joints and runs sample by sample, live or offline.
+A scene is a JSON document of parts (string, bar, plate, membrane, point mass), joints (springs, rattling springs, contacts), exciters (mallets, impulses, plucks, bows, dampers) and listeners (microphones, contact pickups). Each part is baked into a table of vibration modes; the simulation couples those modes through the joints and runs sample by sample, live or offline.
 
 Status: milestones 1 to 4 of the plan (physics core, offline render, real-time playback, 3D web editor, MCP server). Mesh parts, air columns and moving bodies are not built yet.
 
@@ -68,7 +68,8 @@ In the editor, the tools are down the left side (digits 1 to 0 choose them), wha
   - Pluck: click to pull a point aside and let go, or drag across strings to strum them.
   - Bow: hold the mouse down to bow, slide to move the bow, scroll to press harder, let go to lift. Near one end of a string works best.
 - **Play points**: a spot bound to a computer key or a MIDI note. Right-click a spot and choose "Add play point here", then press the key for it; or use **Assign keys** to give each selected part (or every string and bar) a key, left to right along a keyboard row. Keys play in every tool: Shift harder, Alt softer, and a bow sounds while its key is held. The keys are drawn at their points and as caps on the dock, which can be clicked. Play points are saved with the scene as its exciters.
-- **MIDI**: every connected MIDI input is heard. In a play point's panel, Learn binds the next note you play; velocity sets how hard, and releasing the note lifts a bow.
+- **Dampers**: a play point of kind damper is a felt resting on a part. The part only thuds until the damper lifts, which it does while its key or MIDI note is held, and it stops the part when the key comes up. Give a damper the same key as a hammer and the note lasts as long as the key is down, as on a piano. Several play points can share a key (hold Shift when binding), so one key can strike the three strings of a note; the dock shows one cap for each key. Tune lifts the dampers while it measures. `examples/piano.json` is an octave built this way.
+- **MIDI**: every connected MIDI input is heard. In a play point's panel, Learn binds the next note you play; velocity sets how hard, and releasing the note lifts a bow and lets a damper fall.
 - **Space** hushes everything.
 - **Render take** replays everything you played (mouse, keys and MIDI), offline, into `out/<scene name>.wav`.
 - Parts bend with their lowest modes as they ring, slowed down and exaggerated.

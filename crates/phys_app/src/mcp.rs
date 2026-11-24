@@ -28,8 +28,9 @@ const INSTRUCTIONS: &str = r#"phys models sound from connected physical parts. U
 - Parts: string (f0 or tension), bar (free or supported ends), plate (simply supported), membrane (f0 or tension), mass. A part's local axes: strings and bars run along X, plates and membranes lie in XZ, and all vibrate along Y. `pos` and `rot` (degrees, about X then Y then Z) place it.
 - A port is a point on a part in its own normalised coordinates: {"part": "top", "at": [0.7, 0.45]}. `at` is [u] for a string or bar, [u, v] for a plate or membrane, [] for a mass; each 0..1. A port on a node line of a mode cannot excite or hear that mode (the middle of a string misses every even harmonic).
 - Joints act along one direction (default: the normal of `a`'s part). spring: stiffness N/m, optional damping, cubic, and `gap` for free play (a rattle). contact: one-sided Hertz, stiffness N/m^1.5, `gap` the separation at rest. Leave `b` out to tie `a` to the ground. A spring near a string's end raises its pitch a little, as it would physically.
-- To excite by hand: `strike` acts on any point, live (the human hears it and it joins the take), with `kind` strike (a mallet: speed, mass, stiffness), pluck (pull, in metres) or bow (speed, pressure, duration). `listen` / `verify` take the same actions as `strikes` with times `t`, or replay the take, or play the scene's score of named exciters (kinds mallet, impulse, pluck, bow).
+- To excite by hand: `strike` acts on any point, live (the human hears it and it joins the take), with `kind` strike (a mallet: speed, mass, stiffness), pluck (pull, in metres) or bow (speed, pressure, duration). `listen` / `verify` take the same actions as `strikes` with times `t`, or replay the take, or play the scene's score of named exciters (kinds mallet, impulse, pluck, bow, damper).
 - Bowing: speed about 0.1-0.5 m/s, pressure about 0.1-1 N, near one end of a string (at 0.08-0.15). Too little pressure for the speed gives a thin whistle on a high harmonic; too much gives a rough, pitchless scrape. `listen` shows which you have: a steady harmonic series on the string's pitch is a held note.
+- A damper (exciter kind `damper`) is a felt resting on a part: the part only thuds until the damper is fired (lifted), and stops ringing when it is fired with strength 0 (let fall). A piano key is a mallet and a damper with the same `key` and `note`: in a score, lift the damper and fire the mallet at the note's start, and fire the damper with strength 0 at its end. Several exciters may share a key (three unison strings under one key). `strikes` by hand do not lift dampers.
 - A joint pulls a part's pitch away from its own: a string tied to a body sounds 15-20 cents sharp. After tying things together, call `tune` so each part sounds at the pitch it was given (it sets a small `tune` factor on the part); call it again after changing joints.
 - A microphone hears every part through a rough radiation estimate; a pickup reads the surface velocity at one port exactly. A scene with no listener is silent.
 - The human may be editing the same scene in the browser page; scene_summary shows the current state. `screenshot` shows what their viewport shows."#;
@@ -58,7 +59,8 @@ struct ExciteArgs {
     exciter: String,
     /// Mallet: speed in m/s (default 2). Impulse: N.s (default 0.01).
     /// Pluck: metres pulled (default 0.003). Bow: speed in m/s (default
-    /// 0.2); 0 lifts it.
+    /// 0.2); 0 lifts it. Damper: anything but 0 lifts it (the default), 0
+    /// lets it fall.
     #[serde(default)]
     strength: Option<f64>,
 }
@@ -431,6 +433,7 @@ impl Tools {
             "exciter": {"type": "exciter", "name": "pick", "kind": "mallet", "on": {"part": "string", "at": [0.18]}, "mass": 0.002, "stiffness": 1e7},
             "exciter (pluck)": {"type": "exciter", "name": "finger", "kind": "pluck", "on": {"part": "string", "at": [0.2]}, "time": 0.02},
             "exciter (bow)": {"type": "exciter", "name": "bow", "kind": "bow", "on": {"part": "string", "at": [0.12]}, "pressure": 0.3},
+            "exciter (damper)": {"type": "exciter", "name": "felt", "kind": "damper", "on": {"part": "string", "at": [0.12]}, "damping": 1, "key": "a", "note": 60},
             "listener": {"type": "listener", "name": "mic", "kind": "mic", "pos": [0.1, 0.4, 0.3]},
             "settings": {"type": "settings", "solver": "sav", "oversample": 2},
             "score": {"type": "score", "events": [{"t": 0.05, "exciter": "pick", "strength": 1.5}, {"t": 1.0, "exciter": "bow", "strength": 0.2}, {"t": 2.5, "exciter": "bow", "strength": 0}]},
@@ -510,7 +513,8 @@ impl Tools {
     }
 
     /// Fire one of the scene's named exciters (a play point), live. With no
-    /// strength it uses the exciter's own; 0 lifts a bow.
+    /// strength it uses the exciter's own; 0 lifts a bow or lets a damper
+    /// fall.
     #[tool]
     async fn excite(
         &self,

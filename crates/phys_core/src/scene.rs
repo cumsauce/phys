@@ -242,6 +242,11 @@ pub enum ExciterKind {
     /// A bow drawn across the point; `strength` is its speed in m/s (0.2 is
     /// a moderate stroke) and 0 lifts it.
     Bow,
+    /// A felt that rests on the part and stops it ringing, as on a piano
+    /// string. Firing it lifts it (any `strength` but 0) and 0 lets it fall
+    /// back: bound to the key of a hammer, the note rings while the key is
+    /// held. `damping` is how strongly it damps.
+    Damper,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -261,6 +266,9 @@ pub struct Exciter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stiffness: Option<f64>,
     /// Mallet Hunt-Crossley damping, s/m. Default 0.3.
+    /// Damper: the felt's resistance, N.s/m, spread over about 4% of the
+    /// part's length around the port. Default 1 (a piano string stops in
+    /// about a tenth of a second).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub damping: Option<f64>,
     /// Pluck: seconds the pull takes before the release. Default 0.02.
@@ -271,7 +279,8 @@ pub struct Exciter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pressure: Option<f64>,
     /// The strength it fires with when none is given (see `Event::strength`
-    /// for the unit). Default: mallet 2, impulse 0.01, pluck 0.003, bow 0.2.
+    /// for the unit). Default: mallet 2, impulse 0.01, pluck 0.003, bow 0.2,
+    /// damper 1 (lifted).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strength: Option<f64>,
     /// A computer key that plays it in the editor, e.g. "a".
@@ -290,6 +299,7 @@ impl Exciter {
             ExciterKind::Impulse => 0.01,
             ExciterKind::Pluck => 0.003,
             ExciterKind::Bow => 0.2,
+            ExciterKind::Damper => 1.0,
         })
     }
 }
@@ -331,6 +341,7 @@ pub struct Event {
     pub t: f64,
     pub exciter: String,
     /// Mallet: m/s. Impulse: N.s. Pluck: metres pulled. Bow: m/s, 0 to lift.
+    /// Damper: anything but 0 lifts it, 0 lets it fall.
     #[serde(default = "one")]
     pub strength: f64,
 }

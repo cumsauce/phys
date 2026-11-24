@@ -20,7 +20,7 @@ use phys_audio::{Command, Engine};
 use phys_core::ops::{Doc, Op};
 use phys_core::parts;
 use phys_core::render::Render;
-use phys_core::scene::{Scene, Shape};
+use phys_core::scene::{ExciterKind, Scene, Shape};
 use phys_core::sim::{Opts, Rig, Sim};
 use serde::Deserialize;
 use serde_json::json;
@@ -305,6 +305,7 @@ fn level(sim: &mut Sim, rig: &Rig, scene: &Scene) -> f32 {
             continue;
         }
         sim.reset();
+        sim.dampers(false);
         let at = &[0.37, 0.41][..part.shape.at_len()];
         sim.strike(rig.start[i], &rig.weights(i, at, None), 2.0, 0.02, 1e8);
         sim.process(&mut buf);
@@ -664,6 +665,8 @@ impl App {
             let mut worst = 0.0f64;
             for (n, &i) in chosen.iter().enumerate() {
                 sim.reset();
+                // A string under a damper has no pitch to read: lift them.
+                sim.dampers(false);
                 let at: &[f64] = match trial.parts[i].shape {
                     Shape::Plate { .. } => &[0.37, 0.41],
                     Shape::Membrane { .. } => &[0.6, 0.55],
@@ -964,20 +967,23 @@ impl App {
         // Velocity 64 plays the exciter's own strength; the hardest hit
         // about 1.7 times it.
         let scale = 0.25 + 0.75 * f64::from(velocity) / 64.0;
-        let names: Vec<String> = self
-            .doc
-            .scene()
-            .exciters
-            .iter()
-            .filter(|e| e.note == Some(note))
-            .map(|e| e.name.clone())
-            .collect();
+        // Dampers first: they lift before the hammers land.
+        let bound = |damper: bool| {
+            let scene = self.doc.scene();
+            scene
+                .exciters
+                .iter()
+                .filter(|e| e.note == Some(note) && (e.kind == ExciterKind::Damper) == damper)
+                .map(|e| e.name.clone())
+                .collect::<Vec<String>>()
+        };
+        let names = [bound(true), bound(false)].concat();
         for name in names {
             let _ = self.excite(&name, None, scale);
         }
     }
 
-    /// A MIDI note came up: bows bound to it lift.
+    /// A MIDI note came up: bows bound to it lift and dampers fall.
     #[cfg_attr(not(feature = "midi"), allow(dead_code))]
     pub(crate) fn note_off(&mut self, note: u8) {
         let names: Vec<String> = self
@@ -985,7 +991,9 @@ impl App {
             .scene()
             .exciters
             .iter()
-            .filter(|e| e.note == Some(note) && e.kind == phys_core::scene::ExciterKind::Bow)
+            .filter(|e| {
+                e.note == Some(note) && matches!(e.kind, ExciterKind::Bow | ExciterKind::Damper)
+            })
             .map(|e| e.name.clone())
             .collect();
         for name in names {

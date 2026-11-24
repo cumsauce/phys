@@ -40,7 +40,8 @@ fn process_and_excite_do_not_allocate() {
       ],
       "exciters": [
         {"name": "pick", "kind": "mallet", "on": {"part": "string", "at": [0.18]}, "mass": 0.002},
-        {"name": "tap", "kind": "impulse", "on": {"part": "top", "at": [0.3, 0.3]}}
+        {"name": "tap", "kind": "impulse", "on": {"part": "top", "at": [0.3, 0.3]}},
+        {"name": "felt", "kind": "damper", "on": {"part": "string", "at": [0.18]}}
       ],
       "listeners": [
         {"name": "mic", "kind": "mic", "pos": [0.1, 0.4, 0.3]},
@@ -56,6 +57,8 @@ fn process_and_excite_do_not_allocate() {
         if i % 10 == 0 {
             sim.excite(0, 2.0);
             sim.excite(1, 0.01);
+            // The damper lifts and falls: the joints are factored again.
+            sim.excite(2, if i % 20 == 0 { 1.0 } else { 0.0 });
         }
         sim.process(&mut buf);
     }

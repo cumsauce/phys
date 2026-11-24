@@ -186,7 +186,7 @@ hooks.addPlayPoint = addPlayPoint;
 /** Wait for the next key press and bind it to a play point. */
 export function bindKey(name) {
   S.capture = name;
-  toast(`press the key that should play ${name} (Esc to skip)`);
+  toast(`press the key that should play ${name} (with Shift to share the key with what it already plays; Esc to skip)`);
 }
 
 const ROWS = 'asdfghjkl;qwertyuiopzxcvbnm,./';
@@ -234,18 +234,25 @@ function keyChar(code) {
   return CODES[code] ?? null;
 }
 
-const held = new Map();   // key code -> the bows it is holding down
+const held = new Map();   // key code -> the bows it is holding down and the dampers it is holding up
+/** Bows and dampers follow the key: they end when it comes up. */
+const follows = (e) => e.kind === 'bow' || e.kind === 'damper';
 let pending = null;       // a key chosen for a play point the scene does not have yet
 
 /** Bind the chosen key once its play point exists. */
 export function applyPending() {
   if (!pending || !listOf('exciter').some((e) => e.name === pending.name)) return;
-  const { name, key } = pending;
+  const { name, key, share } = pending;
   pending = null;
   const batch = [];
+  // A key moves to its new play point unless it is shared: with Shift (the
+  // strings of one note), or with a damper, which belongs under a hammer's key.
+  const mine = listOf('exciter').find((e) => e.name === name);
   for (const e of listOf('exciter')) {
     if (e.name === name) batch.push({ type: 'exciter', ...clone(e), key });
-    else if (e.key === key) { const c = clone(e); delete c.key; batch.push({ type: 'exciter', ...c }); }
+    else if (e.key === key && !share && mine.kind !== 'damper' && e.kind !== 'damper') {
+      const c = clone(e); delete c.key; batch.push({ type: 'exciter', ...c });
+    }
   }
   ops(batch);
   toast(`${key.toUpperCase()} plays ${name}`);
@@ -261,7 +268,7 @@ export function keyDown(event) {
     S.capture = null;
     // The play point may still be on its way back from the backend: the
     // binding waits for it.
-    pending = { name, key: ch };
+    pending = { name, key: ch, share: event.shiftKey };
     applyPending();
     return true;
   }
@@ -271,11 +278,12 @@ export function keyDown(event) {
   if (!targets.length) return false;
   if (event.repeat) return true;
   const scale = event.shiftKey ? 1.6 : event.altKey ? 0.5 : 1;
-  for (const e of targets) {
+  // Dampers lift before the hammers land.
+  for (const e of [...targets.filter((e) => e.kind === 'damper'), ...targets.filter((e) => e.kind !== 'damper')]) {
     send({ type: 'excite', exciter: e.name, scale });
     lightCap(e.name);
   }
-  const bows = targets.filter((e) => e.kind === 'bow').map((e) => e.name);
+  const bows = targets.filter(follows).map((e) => e.name);
   if (bows.length) held.set(event.code, bows);
   return true;
 }
@@ -302,21 +310,33 @@ export function renderKeys() {
     box.append(none);
     return;
   }
-  for (const e of bound) {
+  // One cap for each key: it plays everything bound to that key, as the key does.
+  const groups = new Map();
+  for (const e of bound) groups.set(e.key, [...(groups.get(e.key) ?? []), e]);
+  for (const [key, all] of groups) {
+    // Dampers lift before the hammers land.
+    const group = [...all.filter((e) => e.kind === 'damper'), ...all.filter((e) => e.kind !== 'damper')];
+    const e = group.find((x) => x.kind !== 'damper') ?? group[0];
     const cap = document.createElement('button');
-    cap.dataset.exciter = e.name;
-    cap.title = `${e.name}: ${e.kind} on ${e.on.part}`;
+    cap.dataset.exciters = JSON.stringify(group.map((x) => x.name));
+    cap.title = group.map((x) => `${x.name}: ${x.kind} on ${x.on.part}`).join('\n');
     const part = partByName(e.on.part);
     const info = S.doc.parts[S.doc.scene.parts.indexOf(part)];
     const note = part && part.shape.kind !== 'plate' && part.shape.kind !== 'mass' ? noteOf(part.shape.f0 ?? info?.hz[0] / (part.tune ?? 1)) : null;
     const small = document.createElement('small');
     small.textContent = note?.name ?? e.on.part.slice(0, 5);
-    cap.append(e.key.toUpperCase(), small);
+    cap.append(key.toUpperCase(), small);
     cap.addEventListener('pointerdown', (ev) => {
-      send({ type: 'excite', exciter: e.name, scale: ev.shiftKey ? 1.6 : ev.altKey ? 0.5 : 1 });
-      lightCap(e.name);
-      if (e.kind === 'bow') {
-        window.addEventListener('pointerup', () => send({ type: 'excite', exciter: e.name, strength: 0 }), { once: true });
+      const scale = ev.shiftKey ? 1.6 : ev.altKey ? 0.5 : 1;
+      for (const x of group) {
+        send({ type: 'excite', exciter: x.name, scale });
+        lightCap(x.name);
+      }
+      const ending = group.filter(follows);
+      if (ending.length) {
+        window.addEventListener('pointerup', () => {
+          for (const x of ending) send({ type: 'excite', exciter: x.name, strength: 0 });
+        }, { once: true });
       }
     });
     box.append(cap);
@@ -325,7 +345,7 @@ export function renderKeys() {
 
 hooks.keyLit = (name) => {
   for (const cap of $('keys').children) {
-    if (cap.dataset?.exciter !== name) continue;
+    if (!cap.dataset?.exciters || !JSON.parse(cap.dataset.exciters).includes(name)) continue;
     cap.classList.add('lit');
     setTimeout(() => cap.classList.remove('lit'), 160);
   }

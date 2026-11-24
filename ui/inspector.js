@@ -213,11 +213,13 @@ function jointFields(box, item, set) {
 
 const STRENGTH = {
   mallet: ['Speed m/s', '2'], impulse: ['Impulse N·s', '0.01'], pluck: ['Pull m', '0.003'], bow: ['Bow speed m/s', '0.2'],
+  damper: null,
 };
 
 function exciterFields(box, item, set) {
   const fire = (strength) => () => send(strength === undefined ? { type: 'excite', exciter: item.name } : { type: 'excite', exciter: item.name, strength });
   if (item.kind === 'bow') box.append(row(button('▶ Bow', fire()), button('Lift', fire(0))));
+  else if (item.kind === 'damper') box.append(row(button('Lift', fire(1)), button('Let fall', fire(0))));
   else box.append(row(button('▶ Play it', fire())));
   box.append(el('div', { class: 'note' }, `On ${item.on.part} [${(item.on.at || []).join(', ')}]. Drag it in the view to move it.`));
 
@@ -235,11 +237,13 @@ function exciterFields(box, item, set) {
   )));
   if (!S.midi.length) box.append(el('div', { class: 'note' }, 'No MIDI device is connected.'));
 
-  box.append(choice('Kind', item.kind, ['mallet', 'pluck', 'bow', 'impulse'], (v) => set({
+  box.append(choice('Kind', item.kind, ['mallet', 'pluck', 'bow', 'impulse', 'damper'], (v) => set({
     kind: v, strength: undefined, mass: undefined, stiffness: undefined, damping: undefined, time: undefined, pressure: undefined,
   })));
-  const [label, hint] = STRENGTH[item.kind];
-  box.append(num(label, item.strength, (v) => set({ strength: v }), hint));
+  if (STRENGTH[item.kind]) {
+    const [label, hint] = STRENGTH[item.kind];
+    box.append(num(label, item.strength, (v) => set({ strength: v }), hint));
+  }
   if (item.kind === 'mallet') {
     box.append(num('Mass kg', item.mass, (v) => set({ mass: v }), '0.02'));
     box.append(num('Stiffness', item.stiffness, (v) => set({ stiffness: v }), '1e8'));
@@ -247,6 +251,10 @@ function exciterFields(box, item, set) {
   }
   if (item.kind === 'pluck') box.append(num('Pull time s', item.time, (v) => set({ time: v }), '0.02'));
   if (item.kind === 'bow') box.append(num('Pressure N', item.pressure, (v) => set({ pressure: v }), '0.3'));
+  if (item.kind === 'damper') {
+    box.append(num('Damping N·s/m', item.damping, (v) => set({ damping: v }), '1'));
+    box.append(el('div', { class: 'note' }, 'A felt resting on the part. It lifts while its key is held: give it the same key as a hammer.'));
+  }
 }
 
 function listenerFields(box, item, set) {

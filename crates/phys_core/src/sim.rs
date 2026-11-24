@@ -48,6 +48,25 @@ impl Clone for Seg {
     }
 }
 
+/// a . b, summed four abreast so the compiler can use vector instructions:
+/// these dot products are most of the cost of a scene with many joints.
+#[inline]
+fn dot4(a: &[f64], b: &[f64]) -> f64 {
+    let (a4, a1) = a.as_chunks::<4>();
+    let (b4, b1) = b.as_chunks::<4>();
+    let mut s = [0.0f64; 4];
+    for (a, b) in a4.iter().zip(b4) {
+        for i in 0..4 {
+            s[i] += a[i] * b[i];
+        }
+    }
+    let mut tail = 0.0;
+    for (a, b) in a1.iter().zip(b1) {
+        tail += a * b;
+    }
+    (s[0] + s[1]) + (s[2] + s[3]) + tail
+}
+
 /// A sparse vector over all modes: what a port (or a joint, as the
 /// difference of two ports) reads from and pushes on.
 #[derive(Clone, Debug, Default)]
@@ -58,10 +77,7 @@ impl Wv {
     fn dot(&self, x: &[f64]) -> f64 {
         let mut s = 0.0;
         for seg in &self.0 {
-            let xs = &x[seg.start..seg.start + seg.w.len()];
-            for (w, x) in seg.w.iter().zip(xs) {
-                s += w * x;
-            }
+            s += dot4(&seg.w, &x[seg.start..seg.start + seg.w.len()]);
         }
         s
     }
@@ -182,6 +198,10 @@ enum Exciter {
         bow: usize,
         pressure: f64,
     },
+    /// Index into `dampers`.
+    Damper {
+        damper: usize,
+    },
 }
 
 /// A pluck: a force that rises smoothly, as a finger pulls the part aside,
@@ -220,6 +240,17 @@ struct Bow {
     pressure_to: f64,
     /// Scratch: this step's damper coefficient.
     c: f64,
+}
+
+/// A felt resting on a part. While it is down every mode it touches has
+/// extra viscous damping: `x` holds that damping per mode, as the decay
+/// rate it adds times the time step. It is the weak-coupling form of a
+/// dashpot spread over the felt: a mode is damped by how much it moves
+/// under the felt, and the modes are not coupled to each other.
+#[derive(Clone, Debug)]
+struct Damper {
+    x: Seg,
+    down: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -263,6 +294,11 @@ pub struct Sim {
     c1: Vec<f64>,
     c2: Vec<f64>,
     d: Vec<f64>,
+    /// `c1` and `c2` with every damper lifted, and the centred scheme's
+    /// leading coefficient 1 + tanh(sigma k) of each mode.
+    c1_0: Vec<f64>,
+    c2_0: Vec<f64>,
+    lead: Vec<f64>,
     mass: Vec<f64>,
     /// Discrete stiffness m w^2 of each mode, for the energy.
     stiff: Vec<f64>,
@@ -277,6 +313,12 @@ pub struct Sim {
     lin_prev: Vec<f64>,
     /// Row-major J x J: (I + K P)^-1 K.
     lin_m: Vec<f64>,
+    /// kappa+ of each linear joint, and scratch for factoring them again
+    /// when a damper moves.
+    lin_kp: Vec<f64>,
+    lin_s: Vec<f64>,
+    lin_inv: Vec<f64>,
+    dense: Vec<f64>,
     lin_y: Vec<f64>,
     /// Joints stepped through `psi`, or explicitly.
     nonlinear: Vec<Joint>,
@@ -297,6 +339,11 @@ pub struct Sim {
     hand: Option<usize>,
     pushes: Vec<Push>,
     bows: Vec<Bow>,
+    dampers: Vec<Damper>,
+    /// A damper rose or fell: the mode coefficients are out of date.
+    damp_dirty: bool,
+    /// Scratch: the damping the dampers that are down add to each mode.
+    extra: Vec<f64>,
     /// What each exciter acts on (empty for the roaming ones).
     probes: Vec<Wv>,
     /// The spot last played: the probe reads the surface speed there.
@@ -325,10 +372,10 @@ fn db(x: f64) -> f64 {
     10f64.powf(x / 20.0)
 }
 
-/// Invert a small dense matrix (row-major, n x n) by Gauss-Jordan.
-fn invert(a: &[f64], n: usize) -> Option<Vec<f64>> {
-    let mut m = a.to_vec();
-    let mut inv = vec![0.0; n * n];
+/// `inv` <- m^-1 by Gauss-Jordan, destroying `m` (both row-major, n x n).
+/// False when `m` is singular. Does not allocate.
+fn invert_into(m: &mut [f64], inv: &mut [f64], n: usize) -> bool {
+    inv.iter_mut().for_each(|x| *x = 0.0);
     for i in 0..n {
         inv[i * n + i] = 1.0;
     }
@@ -341,7 +388,7 @@ fn invert(a: &[f64], n: usize) -> Option<Vec<f64>> {
         }
         let p = m[best * n + col];
         if !(p.is_finite() && p.abs() > 1e-300) {
-            return None;
+            return false;
         }
         if best != col {
             for c in 0..n {
@@ -365,7 +412,44 @@ fn invert(a: &[f64], n: usize) -> Option<Vec<f64>> {
             }
         }
     }
-    Some(inv)
+    true
+}
+
+/// Factor the implicit linear joints for the mode coefficients `d`:
+/// `lin_m` <- (I + K P)^-1 K with P[i][j] = w_i . D w_j and K = diag(`kp`).
+/// False, with `lin_m` left as it was, when the system is singular. `dense`
+/// (one per mode) must be zero and is left zero; `s` and `inv` are J x J
+/// scratch. Does not allocate.
+fn factor_linear(
+    linear: &[Joint],
+    kp: &[f64],
+    d: &[f64],
+    dense: &mut [f64],
+    s: &mut [f64],
+    inv: &mut [f64],
+    lin_m: &mut [f64],
+) -> bool {
+    let nl = linear.len();
+    for (j, joint) in linear.iter().enumerate() {
+        joint.w.push(dense, d, 1.0);
+        for (i, other) in linear.iter().enumerate() {
+            s[i * nl + j] = kp[i] * other.w.dot(dense) + if i == j { 1.0 } else { 0.0 };
+        }
+        for seg in &joint.w.0 {
+            dense[seg.start..seg.start + seg.w.len()]
+                .iter_mut()
+                .for_each(|x| *x = 0.0);
+        }
+    }
+    if !invert_into(s, inv, nl) {
+        return false;
+    }
+    for i in 0..nl {
+        for j in 0..nl {
+            lin_m[i * nl + j] = inv[i * nl + j] * kp[j];
+        }
+    }
+    true
 }
 
 /// Solve the small dense system m y = y in place (r x r, row-major), by
@@ -570,6 +654,9 @@ impl Sim {
             Impulse(usize, Vec<f64>),
             Pluck(usize, Vec<f64>, f64),
             Bow(usize, Vec<f64>, f64),
+            /// The part, and the felt's resistance times the mean square
+            /// weight of each mode under it.
+            Damper(usize, Vec<f64>),
             HandPluck,
             HandBow,
         }
@@ -597,6 +684,22 @@ impl Sim {
                 ExciterKind::Impulse => exciter_src.push(Src::Impulse(on, w)),
                 ExciterKind::Pluck => exciter_src.push(Src::Pluck(on, w, e.time.unwrap_or(0.02))),
                 ExciterKind::Bow => exciter_src.push(Src::Bow(on, w, e.pressure.unwrap_or(0.3))),
+                ExciterKind::Damper => {
+                    // The felt covers about 4% of the part around the port.
+                    const FELT: [f64; 5] = [-0.02, -0.01, 0.0, 0.01, 0.02];
+                    let c = e.damping.unwrap_or(1.0) / FELT.len() as f64;
+                    let mut felt = vec![0.0; w.len()];
+                    for off in FELT {
+                        let mut port = e.on.clone();
+                        if let Some(u) = port.at.first_mut() {
+                            *u = (*u + off).clamp(0.0, 1.0);
+                        }
+                        for (f, w) in felt.iter_mut().zip(bakes[on].weights(&port, dir)) {
+                            *f += c * w * w;
+                        }
+                    }
+                    exciter_src.push(Src::Damper(on, felt));
+                }
             }
         }
 
@@ -778,6 +881,7 @@ impl Sim {
         };
         let k = 1.0 / (sample_rate * os as f64);
 
+        let mut lead = Vec::with_capacity(n);
         let (mut c1, mut c2, mut d, mut stiff) = (
             Vec::with_capacity(n),
             Vec::with_capacity(n),
@@ -795,6 +899,7 @@ impl Sim {
             };
             // The exact update, as a centred scheme with coefficient a.
             let a = 1.0 + (s * k).tanh();
+            lead.push(a);
             c1.push(2.0 * e * turn);
             c2.push(e * e);
             d.push(k * k / (mass[i] * a));
@@ -814,9 +919,11 @@ impl Sim {
             }
         }
         let nl = linear.len();
-        let (mut lin_prev, mut lin_m) = (Vec::new(), Vec::new());
+        let (mut lin_prev, mut lin_m) = (Vec::new(), vec![0.0; nl * nl]);
+        let mut kp = vec![0.0; nl];
+        let (mut lin_s, mut lin_inv) = (vec![0.0; nl * nl], vec![0.0; nl * nl]);
+        let mut dense = vec![0.0; n];
         if nl > 0 {
-            let mut kp = vec![0.0; nl];
             for (i, j) in linear.iter().enumerate() {
                 let ks = match j.law {
                     Law::Spring { k, .. } => k,
@@ -825,23 +932,16 @@ impl Sim {
                 kp[i] = 0.5 * ks + j.damping / (2.0 * k);
                 lin_prev.push(0.5 * ks - j.damping / (2.0 * k));
             }
-            // P[i][j] = w_i . D w_j
-            let mut dense = vec![0.0; n];
-            let mut s = vec![0.0; nl * nl];
-            for (j, joint) in linear.iter().enumerate() {
-                dense.iter_mut().for_each(|x| *x = 0.0);
-                joint.w.push(&mut dense, &d, 1.0);
-                for (i, other) in linear.iter().enumerate() {
-                    s[i * nl + j] = kp[i] * other.w.dot(&dense) + if i == j { 1.0 } else { 0.0 };
-                }
-            }
-            let inv = invert(&s, nl)
-                .ok_or_else(|| "the linear joints form a singular system".to_string())?;
-            lin_m = vec![0.0; nl * nl];
-            for i in 0..nl {
-                for j in 0..nl {
-                    lin_m[i * nl + j] = inv[i * nl + j] * kp[j];
-                }
+            if !factor_linear(
+                &linear,
+                &kp,
+                &d,
+                &mut dense,
+                &mut lin_s,
+                &mut lin_inv,
+                &mut lin_m,
+            ) {
+                return Err("the linear joints form a singular system".to_string());
             }
         }
 
@@ -850,6 +950,7 @@ impl Sim {
         let mut probes: Vec<Wv> = Vec::new();
         let mut pushes: Vec<Push> = Vec::new();
         let mut bows: Vec<Bow> = Vec::new();
+        let mut dampers: Vec<Damper> = Vec::new();
         let (mut hand, mut hand_push, mut hand_bow) = (None, None, None);
         let roaming = || {
             Wv(vec![Seg {
@@ -911,6 +1012,18 @@ impl Sim {
                         pressure,
                     });
                     bows.push(new_bow(Wv(vec![compress(part, &w, 1.0)])));
+                }
+                Src::Damper(part, felt) => {
+                    // Not something to listen to: the probe stays put.
+                    probes.push(Wv::default());
+                    exciters.push(Exciter::Damper {
+                        damper: dampers.len(),
+                    });
+                    let mut x = compress(part, &felt, 1.0);
+                    for (x, m) in x.w.iter_mut().zip(&mass[x.start..]) {
+                        *x *= k / (2.0 * m);
+                    }
+                    dampers.push(Damper { x, down: true });
                 }
                 Src::HandPluck => {
                     hand_push = Some(pushes.len());
@@ -984,6 +1097,9 @@ impl Sim {
             omega,
             pushes,
             bows,
+            damp_dirty: !dampers.is_empty(),
+            dampers,
+            extra: vec![0.0; n],
             probes,
             probe: Wv(vec![Seg {
                 start: 0,
@@ -1005,11 +1121,18 @@ impl Sim {
             k,
             solver,
             regulate: st.regulate,
+            c1_0: c1.clone(),
+            c2_0: c2.clone(),
+            lead,
             c1,
             c2,
             d,
             mass,
             stiff,
+            lin_kp: kp,
+            lin_s,
+            lin_inv,
+            dense,
             q: vec![0.0; n],
             q1: vec![0.0; n],
             qn: vec![0.0; n],
@@ -1033,6 +1156,9 @@ impl Sim {
         };
         for b in 0..sim.bows.len() {
             sim.place_bow(b);
+        }
+        if sim.damp_dirty {
+            sim.refresh_dampers();
         }
         sim.reset();
         Ok((sim, Rig { bakes, start, keep }))
@@ -1058,8 +1184,8 @@ impl Sim {
                 continue;
             };
             let (a, b) = (*start..*start + *len, *from..*from + *len);
-            if self.c1[a.clone()] != old.c1[b.clone()]
-                || self.c2[a.clone()] != old.c2[b.clone()]
+            if self.c1_0[a.clone()] != old.c1_0[b.clone()]
+                || self.c2_0[a.clone()] != old.c2_0[b.clone()]
                 || self.mass[a.clone()] != old.mass[b.clone()]
             {
                 continue;
@@ -1168,6 +1294,10 @@ impl Sim {
 
     /// Back to rest.
     pub fn reset(&mut self) {
+        for d in &mut self.dampers {
+            self.damp_dirty |= !d.down;
+            d.down = true;
+        }
         self.q.iter_mut().for_each(|x| *x = 0.0);
         self.q1.iter_mut().for_each(|x| *x = 0.0);
         for e in &self.exciters {
@@ -1245,6 +1375,12 @@ impl Sim {
                 b.speed_to = strength;
                 b.pressure_to = if strength == 0.0 { 0.0 } else { *pressure };
             }
+            Some(Exciter::Damper { damper }) => {
+                let d = &mut self.dampers[*damper];
+                let down = strength == 0.0;
+                self.damp_dirty |= d.down != down;
+                d.down = down;
+            }
             None => {}
         }
     }
@@ -1289,6 +1425,60 @@ impl Sim {
         p.rise = ((time.clamp(0.001, 2.0) * rate) as usize).max(2);
         p.fall = ((0.0004 * rate) as usize).max(2);
         p.on = true;
+    }
+
+    /// Lift every damper, or let them all fall: for measuring parts that
+    /// are otherwise held still. `reset` lets them fall again.
+    pub fn dampers(&mut self, down: bool) {
+        for d in &mut self.dampers {
+            self.damp_dirty |= d.down != down;
+            d.down = down;
+        }
+    }
+
+    /// Bring the mode coefficients in line with which dampers are down. A
+    /// damper adds a centred viscous term to each mode it touches, which
+    /// changes how far a force moves the mode in one step, so the linear
+    /// joints are factored again and the bows placed again. Does not
+    /// allocate.
+    fn refresh_dampers(&mut self) {
+        self.damp_dirty = false;
+        let n = self.part_modes;
+        self.extra.iter_mut().for_each(|x| *x = 0.0);
+        for d in self.dampers.iter().filter(|d| d.down) {
+            for (e, x) in self.extra[d.x.start..].iter_mut().zip(&d.x.w) {
+                *e += x;
+            }
+        }
+        let k2 = self.k * self.k;
+        for i in 0..n {
+            let (a, x) = (self.lead[i], self.extra[i]);
+            if x == 0.0 {
+                self.c1[i] = self.c1_0[i];
+                self.c2[i] = self.c2_0[i];
+                self.d[i] = k2 / (self.mass[i] * a);
+            } else {
+                self.c1[i] = a * self.c1_0[i] / (a + x);
+                self.c2[i] = (a * self.c2_0[i] - x) / (a + x);
+                self.d[i] = k2 / (self.mass[i] * (a + x));
+            }
+        }
+        if !self.linear.is_empty() {
+            // A singular system keeps the old factors: more damping only
+            // makes it better conditioned, so this does not happen.
+            factor_linear(
+                &self.linear,
+                &self.lin_kp,
+                &self.d,
+                &mut self.dense,
+                &mut self.lin_s,
+                &mut self.lin_inv,
+                &mut self.lin_m,
+            );
+        }
+        for b in 0..self.bows.len() {
+            self.place_bow(b);
+        }
     }
 
     /// Recompute what a bow needs after its weights changed.
@@ -1379,17 +1569,16 @@ impl Sim {
             *y = j.w.dot(x);
         }
         for (i, j) in linear.iter().enumerate() {
-            let z: f64 = lin_m[i * n..(i + 1) * n]
-                .iter()
-                .zip(y.iter())
-                .map(|(m, y)| m * y)
-                .sum();
+            let z = dot4(&lin_m[i * n..(i + 1) * n], y);
             j.w.push(x, d, -z);
         }
     }
 
     #[inline]
     fn step(&mut self) {
+        if self.damp_dirty {
+            self.refresh_dampers();
+        }
         let k = self.k;
         for (((qn, q), q1), (c1, c2)) in self
             .qn
