@@ -1,0 +1,890 @@
+{
+  "name": "piano",
+  "settings": {
+    "solver": "sav",
+    "gain_db": 0.0,
+    "regulate": true
+  },
+  "parts": [
+    {
+      "name": "soundboard",
+      "shape": {
+        "kind": "plate",
+        "size": [
+          0.9,
+          0.5
+        ],
+        "thickness": 0.012
+      },
+      "material": "wood",
+      "pos": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "loss": 0.05,
+      "modes": 160
+    },
+    {
+      "name": "C4",
+      "shape": {
+        "kind": "string",
+        "length": 0.62,
+        "radius": 0.0005,
+        "f0": 261.626
+      },
+      "material": "steel",
+      "pos": [
+        -0.05,
+        0.02,
+        -0.15
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "loss": 0.0005,
+      "damping": 0.6,
+      "modes": 64,
+      "tune": 0.974014
+    },
+    {
+      "name": "Cs4",
+      "shape": {
+        "kind": "string",
+        "length": 0.5869,
+        "radius": 0.0005,
+        "f0": 277.183
+      },
+      "material": "steel",
+      "pos": [
+        -0.0665,
+        0.02,
+        -0.125
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "loss": 0.0005,
+      "damping": 0.6,
+      "modes": 64,
+      "tune": 0.974747
+    },
+    {
+      "name": "D4",
+      "shape": {
+        "kind": "string",
+        "length": 0.5556,
+        "radius": 0.0005,
+        "f0": 293.665
+      },
+      "material": "steel",
+      "pos": [
+        -0.0822,
+        0.02,
+        -0.1
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "loss": 0.0005,
+      "damping": 0.6,
+      "modes": 64,
+      "tune": 0.975289
+    },
+    {
+      "name": "Ds4",
+      "shape": {
+        "kind": "string",
+        "length": 0.5259,
+        "radius": 0.0005,
+        "f0": 311.127
+      },
+      "material": "steel",
+      "pos": [
+        -0.097,
+        0.02,
+        -0.075
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "loss": 0.0005,
+      "damping": 0.6,
+      "modes": 64,
+      "tune": 0.975856
+    },
+    {
+      "name": "E4",
+      "shape": {
+        "kind": "string",
+        "length": 0.4978,
+        "radius": 0.0005,
+        "f0": 329.628
+      },
+      "material": "steel",
+      "pos": [
+        -0.1111,
+        0.02,
+        -0.05
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "loss": 0.0005,
+      "damping": 0.6,
+      "modes": 64,
+      "tune": 0.97641
+    },
+    {
+      "name": "F4",
+      "shape": {
+        "kind": "string",
+        "length": 0.4712,
+        "radius": 0.0005,
+        "f0": 349.228
+      },
+      "material": "steel",
+      "pos": [
+        -0.1244,
+        0.02,
+        -0.025
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "loss": 0.0005,
+      "damping": 0.6,
+      "modes": 64,
+      "tune": 0.977117
+    },
+    {
+      "name": "Fs4",
+      "shape": {
+        "kind": "string",
+        "length": 0.4461,
+        "radius": 0.0005,
+        "f0": 369.994
+      },
+      "material": "steel",
+      "pos": [
+        -0.1369,
+        0.02,
+        0.0
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "loss": 0.0005,
+      "damping": 0.6,
+      "modes": 64,
+      "tune": 0.977937
+    },
+    {
+      "name": "G4",
+      "shape": {
+        "kind": "string",
+        "length": 0.4223,
+        "radius": 0.0005,
+        "f0": 391.995
+      },
+      "material": "steel",
+      "pos": [
+        -0.1488,
+        0.02,
+        0.025
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "loss": 0.0005,
+      "damping": 0.6,
+      "modes": 64,
+      "tune": 0.979177
+    },
+    {
+      "name": "Gs4",
+      "shape": {
+        "kind": "string",
+        "length": 0.3997,
+        "radius": 0.0005,
+        "f0": 415.305
+      },
+      "material": "steel",
+      "pos": [
+        -0.1601,
+        0.02,
+        0.05
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "loss": 0.0005,
+      "damping": 0.6,
+      "modes": 64,
+      "tune": 0.97875
+    },
+    {
+      "name": "A4",
+      "shape": {
+        "kind": "string",
+        "length": 0.3784,
+        "radius": 0.0005,
+        "f0": 440.0
+      },
+      "material": "steel",
+      "pos": [
+        -0.1708,
+        0.02,
+        0.075
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "loss": 0.0005,
+      "damping": 0.6,
+      "modes": 64,
+      "tune": 0.978857
+    },
+    {
+      "name": "As4",
+      "shape": {
+        "kind": "string",
+        "length": 0.3582,
+        "radius": 0.0005,
+        "f0": 466.164
+      },
+      "material": "steel",
+      "pos": [
+        -0.1809,
+        0.02,
+        0.1
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "loss": 0.0005,
+      "damping": 0.6,
+      "modes": 64,
+      "tune": 0.981062
+    },
+    {
+      "name": "B4",
+      "shape": {
+        "kind": "string",
+        "length": 0.339,
+        "radius": 0.0005,
+        "f0": 493.883
+      },
+      "material": "steel",
+      "pos": [
+        -0.1905,
+        0.02,
+        0.125
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "loss": 0.0005,
+      "damping": 0.6,
+      "modes": 64,
+      "tune": 0.978171
+    },
+    {
+      "name": "C5",
+      "shape": {
+        "kind": "string",
+        "length": 0.3209,
+        "radius": 0.0005,
+        "f0": 523.251
+      },
+      "material": "steel",
+      "pos": [
+        -0.1995,
+        0.02,
+        0.15
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "loss": 0.0005,
+      "damping": 0.6,
+      "modes": 64,
+      "tune": 0.978958
+    }
+  ],
+  "joints": [
+    {
+      "name": "bridge_C4",
+      "kind": "spring",
+      "a": {
+        "part": "C4",
+        "at": [
+          0.97
+        ]
+      },
+      "b": {
+        "part": "soundboard",
+        "at": [
+          0.7682,
+          0.2
+        ]
+      },
+      "stiffness": 100000.0
+    },
+    {
+      "name": "bridge_Cs4",
+      "kind": "spring",
+      "a": {
+        "part": "Cs4",
+        "at": [
+          0.97
+        ]
+      },
+      "b": {
+        "part": "soundboard",
+        "at": [
+          0.7325,
+          0.25
+        ]
+      },
+      "stiffness": 100000.0
+    },
+    {
+      "name": "bridge_D4",
+      "kind": "spring",
+      "a": {
+        "part": "D4",
+        "at": [
+          0.97
+        ]
+      },
+      "b": {
+        "part": "soundboard",
+        "at": [
+          0.6988,
+          0.3
+        ]
+      },
+      "stiffness": 100000.0
+    },
+    {
+      "name": "bridge_Ds4",
+      "kind": "spring",
+      "a": {
+        "part": "Ds4",
+        "at": [
+          0.97
+        ]
+      },
+      "b": {
+        "part": "soundboard",
+        "at": [
+          0.6668,
+          0.35
+        ]
+      },
+      "stiffness": 100000.0
+    },
+    {
+      "name": "bridge_E4",
+      "kind": "spring",
+      "a": {
+        "part": "E4",
+        "at": [
+          0.97
+        ]
+      },
+      "b": {
+        "part": "soundboard",
+        "at": [
+          0.6365,
+          0.4
+        ]
+      },
+      "stiffness": 100000.0
+    },
+    {
+      "name": "bridge_F4",
+      "kind": "spring",
+      "a": {
+        "part": "F4",
+        "at": [
+          0.97
+        ]
+      },
+      "b": {
+        "part": "soundboard",
+        "at": [
+          0.6078,
+          0.45
+        ]
+      },
+      "stiffness": 100000.0
+    },
+    {
+      "name": "bridge_Fs4",
+      "kind": "spring",
+      "a": {
+        "part": "Fs4",
+        "at": [
+          0.97
+        ]
+      },
+      "b": {
+        "part": "soundboard",
+        "at": [
+          0.5808,
+          0.5
+        ]
+      },
+      "stiffness": 100000.0
+    },
+    {
+      "name": "bridge_G4",
+      "kind": "spring",
+      "a": {
+        "part": "G4",
+        "at": [
+          0.97
+        ]
+      },
+      "b": {
+        "part": "soundboard",
+        "at": [
+          0.5551,
+          0.55
+        ]
+      },
+      "stiffness": 100000.0
+    },
+    {
+      "name": "bridge_Gs4",
+      "kind": "spring",
+      "a": {
+        "part": "Gs4",
+        "at": [
+          0.97
+        ]
+      },
+      "b": {
+        "part": "soundboard",
+        "at": [
+          0.5308,
+          0.6
+        ]
+      },
+      "stiffness": 100000.0
+    },
+    {
+      "name": "bridge_A4",
+      "kind": "spring",
+      "a": {
+        "part": "A4",
+        "at": [
+          0.97
+        ]
+      },
+      "b": {
+        "part": "soundboard",
+        "at": [
+          0.5078,
+          0.65
+        ]
+      },
+      "stiffness": 100000.0
+    },
+    {
+      "name": "bridge_As4",
+      "kind": "spring",
+      "a": {
+        "part": "As4",
+        "at": [
+          0.97
+        ]
+      },
+      "b": {
+        "part": "soundboard",
+        "at": [
+          0.4861,
+          0.7
+        ]
+      },
+      "stiffness": 100000.0
+    },
+    {
+      "name": "bridge_B4",
+      "kind": "spring",
+      "a": {
+        "part": "B4",
+        "at": [
+          0.97
+        ]
+      },
+      "b": {
+        "part": "soundboard",
+        "at": [
+          0.4654,
+          0.75
+        ]
+      },
+      "stiffness": 100000.0
+    },
+    {
+      "name": "bridge_C5",
+      "kind": "spring",
+      "a": {
+        "part": "C5",
+        "at": [
+          0.97
+        ]
+      },
+      "b": {
+        "part": "soundboard",
+        "at": [
+          0.4459,
+          0.8
+        ]
+      },
+      "stiffness": 100000.0
+    }
+  ],
+  "exciters": [
+    {
+      "name": "hammer_C4",
+      "kind": "mallet",
+      "on": {
+        "part": "C4",
+        "at": [
+          0.12
+        ]
+      },
+      "mass": 0.009,
+      "stiffness": 20000000.0,
+      "strength": 2.5,
+      "key": "a",
+      "note": 60
+    },
+    {
+      "name": "hammer_Cs4",
+      "kind": "mallet",
+      "on": {
+        "part": "Cs4",
+        "at": [
+          0.12
+        ]
+      },
+      "mass": 0.009,
+      "stiffness": 20000000.0,
+      "strength": 2.5,
+      "key": "w",
+      "note": 61
+    },
+    {
+      "name": "hammer_D4",
+      "kind": "mallet",
+      "on": {
+        "part": "D4",
+        "at": [
+          0.12
+        ]
+      },
+      "mass": 0.009,
+      "stiffness": 20000000.0,
+      "strength": 2.5,
+      "key": "s",
+      "note": 62
+    },
+    {
+      "name": "hammer_Ds4",
+      "kind": "mallet",
+      "on": {
+        "part": "Ds4",
+        "at": [
+          0.12
+        ]
+      },
+      "mass": 0.009,
+      "stiffness": 20000000.0,
+      "strength": 2.5,
+      "key": "e",
+      "note": 63
+    },
+    {
+      "name": "hammer_E4",
+      "kind": "mallet",
+      "on": {
+        "part": "E4",
+        "at": [
+          0.12
+        ]
+      },
+      "mass": 0.009,
+      "stiffness": 20000000.0,
+      "strength": 2.5,
+      "key": "d",
+      "note": 64
+    },
+    {
+      "name": "hammer_F4",
+      "kind": "mallet",
+      "on": {
+        "part": "F4",
+        "at": [
+          0.12
+        ]
+      },
+      "mass": 0.009,
+      "stiffness": 20000000.0,
+      "strength": 2.5,
+      "key": "f",
+      "note": 65
+    },
+    {
+      "name": "hammer_Fs4",
+      "kind": "mallet",
+      "on": {
+        "part": "Fs4",
+        "at": [
+          0.12
+        ]
+      },
+      "mass": 0.009,
+      "stiffness": 20000000.0,
+      "strength": 2.5,
+      "key": "t",
+      "note": 66
+    },
+    {
+      "name": "hammer_G4",
+      "kind": "mallet",
+      "on": {
+        "part": "G4",
+        "at": [
+          0.12
+        ]
+      },
+      "mass": 0.009,
+      "stiffness": 20000000.0,
+      "strength": 2.5,
+      "key": "g",
+      "note": 67
+    },
+    {
+      "name": "hammer_Gs4",
+      "kind": "mallet",
+      "on": {
+        "part": "Gs4",
+        "at": [
+          0.12
+        ]
+      },
+      "mass": 0.009,
+      "stiffness": 20000000.0,
+      "strength": 2.5,
+      "key": "y",
+      "note": 68
+    },
+    {
+      "name": "hammer_A4",
+      "kind": "mallet",
+      "on": {
+        "part": "A4",
+        "at": [
+          0.12
+        ]
+      },
+      "mass": 0.009,
+      "stiffness": 20000000.0,
+      "strength": 2.5,
+      "key": "h",
+      "note": 69
+    },
+    {
+      "name": "hammer_As4",
+      "kind": "mallet",
+      "on": {
+        "part": "As4",
+        "at": [
+          0.12
+        ]
+      },
+      "mass": 0.009,
+      "stiffness": 20000000.0,
+      "strength": 2.5,
+      "key": "u",
+      "note": 70
+    },
+    {
+      "name": "hammer_B4",
+      "kind": "mallet",
+      "on": {
+        "part": "B4",
+        "at": [
+          0.12
+        ]
+      },
+      "mass": 0.009,
+      "stiffness": 20000000.0,
+      "strength": 2.5,
+      "key": "j",
+      "note": 71
+    },
+    {
+      "name": "hammer_C5",
+      "kind": "mallet",
+      "on": {
+        "part": "C5",
+        "at": [
+          0.12
+        ]
+      },
+      "mass": 0.009,
+      "stiffness": 20000000.0,
+      "strength": 2.5,
+      "key": "k",
+      "note": 72
+    }
+  ],
+  "listeners": [
+    {
+      "name": "mic_left",
+      "kind": "mic",
+      "pos": [
+        -0.3,
+        0.5,
+        0.4
+      ],
+      "gain_db": 0.0,
+      "pan": -0.5
+    },
+    {
+      "name": "mic_right",
+      "kind": "mic",
+      "pos": [
+        0.3,
+        0.5,
+        0.4
+      ],
+      "gain_db": 0.0,
+      "pan": 0.5
+    }
+  ],
+  "score": [
+    {
+      "t": 0.1,
+      "exciter": "hammer_C4",
+      "strength": 2.5
+    },
+    {
+      "t": 0.4,
+      "exciter": "hammer_Cs4",
+      "strength": 2.5
+    },
+    {
+      "t": 0.7,
+      "exciter": "hammer_D4",
+      "strength": 2.5
+    },
+    {
+      "t": 1.0,
+      "exciter": "hammer_Ds4",
+      "strength": 2.5
+    },
+    {
+      "t": 1.3,
+      "exciter": "hammer_E4",
+      "strength": 2.5
+    },
+    {
+      "t": 1.6,
+      "exciter": "hammer_F4",
+      "strength": 2.5
+    },
+    {
+      "t": 1.9,
+      "exciter": "hammer_Fs4",
+      "strength": 2.5
+    },
+    {
+      "t": 2.2,
+      "exciter": "hammer_G4",
+      "strength": 2.5
+    },
+    {
+      "t": 2.5,
+      "exciter": "hammer_Gs4",
+      "strength": 2.5
+    },
+    {
+      "t": 2.8,
+      "exciter": "hammer_A4",
+      "strength": 2.5
+    },
+    {
+      "t": 3.1,
+      "exciter": "hammer_As4",
+      "strength": 2.5
+    },
+    {
+      "t": 3.4,
+      "exciter": "hammer_B4",
+      "strength": 2.5
+    },
+    {
+      "t": 3.7,
+      "exciter": "hammer_C5",
+      "strength": 2.5
+    },
+    {
+      "t": 4.4,
+      "exciter": "hammer_C4",
+      "strength": 3.0
+    },
+    {
+      "t": 4.41,
+      "exciter": "hammer_E4",
+      "strength": 3.0
+    },
+    {
+      "t": 4.42,
+      "exciter": "hammer_G4",
+      "strength": 3.0
+    },
+    {
+      "t": 4.43,
+      "exciter": "hammer_C5",
+      "strength": 3.0
+    }
+  ]
+}
